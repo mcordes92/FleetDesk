@@ -10,6 +10,7 @@
     "start": "set ELECTRON_RUN_AS_NODE=& electron .",
     "build:win": "set CSC_IDENTITY_AUTO_DISCOVERY=false& electron-builder --win nsis",
     "db:migrate": "npm run rebuild:node && node scripts/migrate.js && npm run rebuild:electron",
+    "icons:generate": "node scripts/generate-icon.js",
     "rebuild:node": "npm rebuild better-sqlite3",
     "rebuild:electron": "electron-builder install-app-deps",
     "postinstall": "electron-builder install-app-deps",
@@ -41,9 +42,12 @@
     ],
     "win": {
       "target": "nsis",
+      "icon": "assets/icon.ico",
       "signAndEditExecutable": false
     },
     "nsis": {
+      "installerIcon": "assets/icon.ico",
+      "uninstallerIcon": "assets/icon.ico",
       "oneClick": false,
       "perMachine": false,
       "allowToChangeInstallationDirectory": true,

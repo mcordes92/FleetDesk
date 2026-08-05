@@ -13,6 +13,7 @@ function createWindow() {
     minWidth: 1100,
     minHeight: 740,
     title: 'FleetDesk',
+    icon: path.join(__dirname, '../../assets/icon.png'),
     show: false,
     backgroundColor: '#111827',
     webPreferences: {
