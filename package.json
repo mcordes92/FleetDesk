@@ -1,0 +1,56 @@
+{
+  "name": "fleetdesk",
+  "version": "1.0.0",
+  "description": "FleetDesk - lokale Windows-Desktopanwendung fuer Transportunternehmen",
+  "main": "src/main/main.js",
+  "author": "FleetDesk",
+  "license": "MIT",
+  "scripts": {
+    "dev": "set ELECTRON_RUN_AS_NODE=& electron .",
+    "start": "set ELECTRON_RUN_AS_NODE=& electron .",
+    "build:win": "set CSC_IDENTITY_AUTO_DISCOVERY=false& electron-builder --win nsis",
+    "db:migrate": "npm run rebuild:node && node scripts/migrate.js && npm run rebuild:electron",
+    "rebuild:node": "npm rebuild better-sqlite3",
+    "rebuild:electron": "electron-builder install-app-deps",
+    "postinstall": "electron-builder install-app-deps",
+    "test": "npm run rebuild:node && node --test && npm run rebuild:electron"
+  },
+  "dependencies": {
+    "@popperjs/core": "^2.11.8",
+    "better-sqlite3": "^11.10.0",
+    "bootstrap": "^5.3.3",
+    "bootstrap-icons": "^1.11.3",
+    "choices.js": "^11.0.2",
+    "electron-log": "^5.2.4",
+    "leaflet": "^1.9.4"
+  },
+  "devDependencies": {
+    "electron": "^31.7.7",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "de.fleetdesk.app",
+    "productName": "FleetDesk",
+    "directories": {
+      "output": "installer"
+    },
+    "files": [
+      "src/**/*",
+      "scripts/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": "nsis",
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": "always",
+      "createStartMenuShortcut": true,
+      "shortcutName": "FleetDesk",
+      "deleteAppDataOnUninstall": false
+    }
+  }
+}
