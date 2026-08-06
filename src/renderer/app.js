@@ -285,7 +285,7 @@ async function initChoices(row) {
     const selected = (row?.vehicle_ids || []).includes(vehicle.id);
     return `<option value="${vehicle.id}" ${selected ? 'selected' : ''} ${vehicle.selectable || selected ? '' : 'disabled'}>${vehicle.name} · ${vehicle.license_plate} · ${vehicle.vehicle_type} · ${vehicle.cargo_type} · ${vehicle.capacity_fe ?? '-'} FE · ${vehicle.location_label} · ${vehicle.distance_km == null ? 'Entfernung unbekannt' : fmt.number(vehicle.distance_km, 1) + ' km Luftlinie'} · ${vehicle.selectable || selected ? 'verfügbar' : 'nicht verfügbar'}</option>`;
   }).join('');
-  vehicleChoices = new Choices(select, { removeItemButton: true, shouldSort: false, searchEnabled: true, searchPlaceholderValue: 'Fahrzeug suchen', itemSelectText: 'Auswählen', noResultsText: 'Keine Fahrzeuge gefunden', noChoicesText: 'Keine Fahrzeuge verfügbar', position: 'bottom' });
+  vehicleChoices = new Choices(select, { removeItemButton: true, shouldSort: false, searchEnabled: true, searchPlaceholderValue: 'Fahrzeug suchen', itemSelectText: 'Auswählen', noResultsText: 'Keine Fahrzeuge gefunden', noChoicesText: 'Keine Fahrzeuge verfügbar', position: 'bottom', maxItemCount: -1, renderChoiceLimit: -1, searchResultLimit: 50 });
   vehicleChoices.hideDropdown();
   const suggestions = await call(api.suggestVehicles(order));
   document.getElementById('suggestions').innerHTML = suggestions.length ? suggestions.map((item) => `${item.sufficient ? 'Ausreichend' : 'Unzureichend'}: ${item.vehicles.map((v) => v.name).join(', ')} · ${fmt.number(item.capacity, 0)} FE · ${fmt.percent(item.utilization)}`).join('<br>') : 'Keine passenden Fahrzeugvorschläge vorhanden.';
