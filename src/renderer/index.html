@@ -32,6 +32,21 @@
       <form id="recordForm" class="modal-form"><div class="modal-body"><div id="formFields" class="row g-3"></div><div id="formHint" class="mt-3"></div></div><div class="modal-footer"><button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Abbrechen</button><button type="submit" class="btn btn-primary"><i class="bi bi-save"></i> Speichern</button></div></form>
     </div></div>
   </div>
+  <div class="modal fade" id="invoiceImportModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-xl modal-dialog-scrollable"><div class="modal-content">
+      <div class="modal-header"><h2 class="modal-title fs-5">Eingangsrechnung aus Bild importieren</h2><button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Schliessen"></button></div>
+      <form id="invoiceImportForm"><div class="modal-body"><div class="row g-3"><div class="col-lg-6"><img id="invoiceImportPreview" class="img-fluid rounded border" alt="Rechnungsbild Vorschau"><details class="mt-3"><summary>OCR-Rohtext anzeigen</summary><pre id="invoiceImportText" class="small mt-2 mb-0 text-secondary border rounded p-2 overflow-auto" style="max-height: 240px;"></pre></details></div><div class="col-lg-6"><div class="row g-3" id="invoiceImportFields"></div><div class="alert alert-info mt-3 mb-0">Bitte OCR-Daten prüfen und bei Bedarf korrigieren. Gespeichert wird erst nach Klick auf Import speichern.</div></div></div></div><div class="modal-footer"><button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Abbrechen</button><button type="submit" class="btn btn-primary"><i class="bi bi-save"></i> Import speichern</button></div></form>
+    </div></div>
+  </div>
+  <div class="modal fade" id="invoiceImageModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-xl modal-dialog-scrollable"><div class="modal-content">
+      <div class="modal-header"><h2 class="modal-title fs-5" id="invoiceImageTitle">Rechnungsbild</h2><button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Schliessen"></button></div>
+      <div class="modal-body text-center"><img id="invoiceImagePreview" class="img-fluid rounded border" alt="Gespeichertes Rechnungsbild"></div>
+    </div></div>
+  </div>
+  <div id="loadingOverlay" class="position-fixed top-0 start-0 w-100 h-100 d-none align-items-center justify-content-center bg-black bg-opacity-75" style="z-index: 2000;">
+    <div class="card shadow-lg"><div class="card-body text-center p-4"><div class="spinner-border text-primary mb-3" role="status" aria-hidden="true"></div><h2 class="h5 mb-2" id="loadingTitle">Bitte warten</h2><p class="text-secondary mb-0" id="loadingText">Vorgang läuft...</p></div></div>
+  </div>
   <div class="toast-container position-fixed bottom-0 end-0 p-3" id="toasts"></div>
   <script src="../../node_modules/bootstrap/dist/js/bootstrap.bundle.min.js"></script>
   <script src="../../node_modules/choices.js/public/assets/scripts/choices.min.js"></script>

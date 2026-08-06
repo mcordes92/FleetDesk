@@ -152,6 +152,13 @@ const migrations = [
       FROM vehicles
       WHERE location_label IS NOT NULL AND trim(location_label) != '';
     `
+  },
+  {
+    version: 3,
+    name: 'invoice_images',
+    sql: `
+      ALTER TABLE invoices ADD COLUMN image_path TEXT;
+    `
   }
 ];
 

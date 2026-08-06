@@ -1,7 +1,8 @@
 const fs = require('fs');
 const path = require('path');
-const { dialog, app } = require('electron');
+const { dialog, app, shell, nativeImage } = require('electron');
 const Database = require('better-sqlite3');
+const { createWorker } = require('tesseract.js');
 const { migrate } = require('../storage/database');
 const { resolveCoordinates, geocodeWithOpenStreetMap } = require('./geocodingService');
 const { VEHICLE_TYPES, CARGO_TYPES, PERSONNEL_POSITIONS, ORDER_TYPES, ORDER_STATUSES, DELIVERY_NOTE_STATUSES, INVOICE_STATUSES, assertRequired, assertOneOf, assertNonNegative, assertPercent, toBool, toCents, parseLocaleNumber, calculateMaintenance, calculateRevenue, calculateInvestment, calculateProfitLoss, calculateUtilization, haversineKm, suggestVehicleCombinations } = require('../../shared/business');
@@ -44,6 +45,12 @@ function update(db, entity, id, data) {
 
 function remove(db, entity, id) {
   ensureEntity(entity);
+  if (entity === 'invoices') {
+    const row = db.prepare('SELECT image_path FROM invoices WHERE id=?').get(id);
+    db.prepare(`DELETE FROM ${TABLES[entity]} WHERE id = ?`).run(id);
+    if (row?.image_path && fs.existsSync(row.image_path)) fs.unlinkSync(row.image_path);
+    return { ok: true };
+  }
   if (entity === 'vehicles') {
     const assignments = db.prepare('SELECT COUNT(*) count FROM order_vehicle_assignments WHERE vehicle_id=?').get(id).count;
     if (assignments > 0) {
@@ -112,7 +119,185 @@ function saveInvoice(db, id, data) {
   assertRequired(data.invoice_number, 'Rechnungsnummer'); assertRequired(data.creditor, 'Kreditor'); assertRequired(data.item, 'Posten'); assertRequired(data.invoice_date, 'Datum'); assertRequired(data.due_date, 'Faelligkeit'); assertOneOf(data.payment_status, INVOICE_STATUSES, 'Zahlungsstatus'); assertNonNegative(data.amount, 'Betrag');
   assertDate(data.invoice_date, 'Datum'); assertDate(data.due_date, 'Faelligkeit');
   const status = data.payment_status !== 'bezahlt' && data.due_date < new Date().toISOString().slice(0, 10) ? 'überfällig' : data.payment_status;
-  return runDbWrite(() => upsert(db, 'invoices', id, { invoice_number: data.invoice_number.trim(), creditor: data.creditor.trim(), item: data.item.trim(), amount_cents: toCents(data.amount), invoice_date: data.invoice_date, due_date: data.due_date, payment_status: status }));
+  const row = { invoice_number: data.invoice_number.trim(), creditor: data.creditor.trim(), item: data.item.trim(), amount_cents: toCents(data.amount), invoice_date: data.invoice_date, due_date: data.due_date, payment_status: status };
+  if (data.image_path !== undefined) row.image_path = data.image_path || null;
+  return runDbWrite(() => upsert(db, 'invoices', id, row));
+}
+
+async function analyzeInvoiceImage() {
+  const selected = await selectInvoiceImage();
+  if (selected.canceled) return selected;
+  return analyzeInvoiceImagePath(selected.sourcePath);
+}
+
+async function selectInvoiceImage() {
+  const result = await dialog.showOpenDialog({ title: 'Rechnungsbild importieren', properties: ['openFile'], filters: [{ name: 'Bilder', extensions: ['png', 'jpg', 'jpeg', 'webp', 'bmp'] }] });
+  if (result.canceled) return { canceled: true };
+  return { sourcePath: result.filePaths[0] };
+}
+
+async function analyzeSelectedInvoiceImage(imagePath) {
+  assertRequired(imagePath, 'Bilddatei');
+  return analyzeInvoiceImagePath(imagePath);
+}
+
+async function analyzeInvoiceImagePath(imagePath) {
+  const text = await recognizeInvoiceImageText(imagePath);
+  return { sourcePath: imagePath, imageDataUrl: imageDataUrl(imagePath), text, parsed: parseInvoiceText(text) };
+}
+
+async function createInvoiceFromImageImport(db, data) {
+  assertRequired(data.source_path, 'Bilddatei');
+  const invoice = create(db, 'invoices', { ...data, image_path: null });
+  const imagePath = copyInvoiceImage(invoice.id, data.source_path);
+  db.prepare('UPDATE invoices SET image_path=?, updated_at=CURRENT_TIMESTAMP WHERE id=?').run(imagePath, invoice.id);
+  return get(db, 'invoices', invoice.id);
+}
+
+async function openInvoiceImage(db, id) {
+  const invoice = get(db, 'invoices', id);
+  if (!invoice.image_path) throw new Error('Zu dieser Eingangsrechnung ist kein Bild gespeichert.');
+  if (!fs.existsSync(invoice.image_path)) throw new Error('Die gespeicherte Bilddatei wurde nicht gefunden.');
+  const error = await shell.openPath(invoice.image_path);
+  if (error) throw new Error(error);
+  return { ok: true };
+}
+
+function invoiceImage(db, id) {
+  const invoice = get(db, 'invoices', id);
+  if (!invoice.image_path) throw new Error('Zu dieser Eingangsrechnung ist kein Bild gespeichert.');
+  if (!fs.existsSync(invoice.image_path)) throw new Error('Die gespeicherte Bilddatei wurde nicht gefunden.');
+  return { invoice_number: invoice.invoice_number, imageDataUrl: imageDataUrl(invoice.image_path) };
+}
+
+async function recognizeInvoiceImageText(imagePath) {
+  const ocrImagePath = prepareOcrImage(imagePath);
+  const size = nativeImage.createFromPath(ocrImagePath).getSize();
+  const regions = [
+    ['Kreditor Logo', rect(size, 0.06, 0.06, 0.68, 0.20)],
+    ['Kopf rechts', rect(size, 0.58, 0.13, 0.40, 0.12)],
+    ['Tabelle rechts', rect(size, 0.72, 0.31, 0.24, 0.50)],
+    ['Warenbereich', rect(size, 0.14, 0.30, 0.62, 0.52)],
+    ['Footer', rect(size, 0.25, 0.88, 0.60, 0.08)],
+    ['Gesamtzeile', rect(size, 0.12, 0.78, 0.84, 0.10)],
+    ['Vollbild', null]
+  ];
+  const parts = [];
+  const worker = await createWorker('deu+eng');
+  try {
+    for (const [label, rectangle] of regions) {
+      const text = await recognizeImageText(worker, ocrImagePath, rectangle);
+      if (text.trim()) parts.push(`--- ${label} ---\n${text.trim()}`);
+    }
+  } finally {
+    await worker.terminate();
+    try { fs.unlinkSync(ocrImagePath); } catch (_error) {}
+  }
+  return parts.join('\n\n');
+}
+
+async function recognizeImageText(worker, imagePath, rectangle) {
+  await worker.setParameters({ tessedit_pageseg_mode: rectangle ? '6' : '11', preserve_interword_spaces: '1' });
+  const { data } = await worker.recognize(imagePath, rectangle ? { rectangle } : undefined);
+  return data.text || '';
+}
+
+function prepareOcrImage(imagePath) {
+  const image = nativeImage.createFromPath(imagePath);
+  const size = image.getSize();
+  if (!size.width || !size.height) throw new Error('Das Bild konnte nicht fuer OCR geladen werden.');
+  const scale = size.width < 1800 ? Math.ceil(1800 / size.width) : 2;
+  const resized = image.resize({ width: size.width * scale, height: size.height * scale, quality: 'best' });
+  const target = path.join(app.getPath('temp'), `fleetdesk-ocr-${Date.now()}.png`);
+  fs.writeFileSync(target, resized.toPNG());
+  return target;
+}
+
+function rect(size, left, top, width, height) {
+  return { left: Math.round(size.width * left), top: Math.round(size.height * top), width: Math.round(size.width * width), height: Math.round(size.height * height) };
+}
+
+function parseInvoiceText(text) {
+  const normalized = String(text || '').replace(/\r/g, '').replace(/[ \t]+/g, ' ');
+  const lines = normalized.split('\n').map((line) => line.trim()).filter(Boolean);
+  const invoiceNumber = matchFirst(normalized, [/RE[-\s]*Nr\.?\s*[:;]?\s*([A-Z]{1,4}[-\s]*\d+)/i, /(RE[-\s]*\d{4,})/i]);
+  const invoiceDate = parseGermanDate(matchFirst(normalized, [/RE[-\s]*Datum\s*[:;]?\s*(\d{1,2}\.\d{1,2}\.\d{4})/i, /Datum\s*[:;]?\s*(\d{1,2}\.\d{1,2}\.\d{4})/i]));
+  const dueDate = parseGermanDate(matchFirst(normalized, [/f[äa]llig\s+am\s+(\d{1,2}\.\d{1,2}\.\d{4})/i, /Rechnungsbetrag\s+ist\s+f[äa]llig\s+am\s+(\d{1,2}\.\d{1,2}\.\d{4})/i])) || addDays(invoiceDate, 14);
+  const amount = matchFirst(normalized, [/Gesamt\s*:?\s*(\d{1,3}(?:\.\d{3})*,\d{2})\s*€/i, /(\d{1,3}(?:\.\d{3})*,\d{2})\s*€/g]);
+  const item = matchFirst(normalized, [/\b\d+\s+([A-Za-zÄÖÜäöüß-]+)\s+\d{1,3}(?:\.\d{3})*,\d{2}\s*€/i]) || 'Aufträge';
+  const creditor = detectCreditor(lines);
+  const paymentStatus = /Bezahlt/i.test(normalized) ? 'bezahlt' : 'offen';
+  return { invoice_number: cleanInvoiceNumber(invoiceNumber), creditor, item, amount_cents: toCents(amount), invoice_date: invoiceDate, due_date: dueDate, payment_status: paymentStatus };
+}
+
+function detectCreditor(lines) {
+  const allText = lines.join(' ');
+  const known = detectKnownCreditor(allText);
+  if (known) return known;
+  const logoLines = extractSection(lines, 'Kreditor Logo');
+  const logoKnown = detectKnownCreditor(logoLines.join(' '));
+  if (logoKnown) return logoKnown;
+  return logoLines.find(isCreditorCandidate) || lines.find(isCreditorCandidate) || '';
+}
+
+function detectKnownCreditor(text) {
+  const normalized = normalizeOcrText(text);
+  if ((normalized.includes('versicherung') || normalized.includes('versicher')) && normalized.includes('ubermut')) return 'Versicherungshaus Übermut';
+  if (normalized.includes('ubermut') && normalized.includes('vertragsnummer')) return 'Versicherungshaus Übermut';
+  if (normalized.includes('geldscheffel') || (normalized.includes('marketing') && normalized.includes('kommunikation'))) return 'Geldscheffel Hamburg';
+  if ((normalized.includes('lkw') && normalized.includes('sim')) || normalized.includes('servicecenter')) return 'LKW-Sim Service-Center';
+  if (normalized.includes('immobilienheinz') || (normalized.includes('immobilien') && normalized.includes('heinz'))) return 'Immobilien-Heinz';
+  return '';
+}
+
+function normalizeOcrText(value) {
+  return String(value || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '');
+}
+
+function extractSection(lines, label) {
+  const start = lines.findIndex((line) => line === `--- ${label} ---`);
+  if (start < 0) return [];
+  const section = [];
+  for (let index = start + 1; index < lines.length; index += 1) {
+    if (/^--- .+ ---$/.test(lines[index])) break;
+    if (isCreditorCandidate(lines[index])) section.push(lines[index]);
+  }
+  return section;
+}
+
+function isCreditorCandidate(line) {
+  return !/^---|RE[-\s]*Nr|RE[-\s]*Datum|Containerdienst|Kassel|Summe|Ware|Gesamt|Menge|Wir erlauben|folgende Positionen|Vertrags[-\s]*Nummer/i.test(line)
+    && !/^[\d.,\s]+€?$/.test(line)
+    && !/\d{1,3}(?:\.\d{3})*,\d{2}\s*€/.test(line)
+    && /[A-Za-zÄÖÜäöüß]/.test(line)
+    && line.length > 3;
+}
+
+function matchFirst(text, patterns) {
+  for (const pattern of patterns) {
+    if (pattern.global) {
+      const matches = [...String(text || '').matchAll(pattern)];
+      if (matches.length) return matches[matches.length - 1][1] || matches[matches.length - 1][0];
+      continue;
+    }
+    const match = String(text || '').match(pattern);
+    if (match) return match[1] || match[0];
+  }
+  return '';
+}
+
+function cleanInvoiceNumber(value) { return String(value || '').replace(/\s+/g, '').replace(/^RE(\d)/i, 'RE-$1').toUpperCase(); }
+function parseGermanDate(value) { const match = String(value || '').match(/(\d{1,2})\.(\d{1,2})\.(\d{4})/); return match ? `${match[3]}-${match[2].padStart(2, '0')}-${match[1].padStart(2, '0')}` : ''; }
+function addDays(isoDate, days) { if (!isoDate) return ''; const date = new Date(`${isoDate}T00:00:00Z`); date.setUTCDate(date.getUTCDate() + days); return date.toISOString().slice(0, 10); }
+function imageDataUrl(filePath) { const ext = path.extname(filePath).slice(1).toLowerCase().replace('jpg', 'jpeg') || 'png'; return `data:image/${ext};base64,${fs.readFileSync(filePath).toString('base64')}`; }
+function copyInvoiceImage(invoiceId, sourcePath) {
+  if (!fs.existsSync(sourcePath)) throw new Error('Die ausgewaehlte Bilddatei wurde nicht gefunden.');
+  const dir = path.join(app.getPath('userData'), 'invoice-images');
+  fs.mkdirSync(dir, { recursive: true });
+  const ext = path.extname(sourcePath).toLowerCase() || '.png';
+  const target = path.join(dir, `invoice-${invoiceId}${ext}`);
+  fs.copyFileSync(sourcePath, target);
+  return target;
 }
 
 function saveInvestment(db, id, data) {
@@ -410,4 +595,4 @@ function nullableNumber(value) { return value === '' || value === undefined || v
 function clampPercent(value) { const number = nullableNumber(value); return number == null || Number.isNaN(number) ? 0 : Math.min(100, Math.max(0, number)); }
 function ensureEntity(entity) { if (!TABLES[entity]) throw new Error('Unbekannter Verwaltungsbereich.'); }
 
-module.exports = { list, get, create, update, remove, dashboard, getSettings, saveSettings, vehicleOptions, suggestions, orderOptions, locationOptions, geocodeLocation, geocodeAddress, mapData, exportDatabase, importDatabase, backupDatabase, validateImportDatabase, relaunchApp };
+module.exports = { list, get, create, update, remove, dashboard, getSettings, saveSettings, vehicleOptions, suggestions, orderOptions, locationOptions, geocodeLocation, geocodeAddress, mapData, exportDatabase, importDatabase, backupDatabase, validateImportDatabase, relaunchApp, analyzeInvoiceImage, selectInvoiceImage, analyzeSelectedInvoiceImage, createInvoiceFromImageImport, openInvoiceImage, invoiceImage };

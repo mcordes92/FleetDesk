@@ -4,6 +4,9 @@ let activeEntity = 'dashboard';
 let editingId = null;
 let dirty = false;
 let modal;
+let invoiceImportModal;
+let invoiceImageModal;
+let invoiceImportSourcePath = '';
 let vehicleChoices;
 let currentSort = { key: null, direction: 1 };
 let currentMap;
@@ -27,7 +30,10 @@ const configs = {
 
 document.addEventListener('DOMContentLoaded', () => {
   modal = new bootstrap.Modal(document.getElementById('recordModal'));
+  invoiceImportModal = new bootstrap.Modal(document.getElementById('invoiceImportModal'));
+  invoiceImageModal = new bootstrap.Modal(document.getElementById('invoiceImageModal'));
   document.getElementById('recordModal').addEventListener('hidden.bs.modal', destroyVehicleChoices);
+  document.getElementById('invoiceImportForm').addEventListener('submit', saveInvoiceImport);
   renderNavigation();
   document.getElementById('recordForm').addEventListener('submit', saveForm);
   window.addEventListener('beforeunload', (event) => { if (dirty) { event.preventDefault(); event.returnValue = ''; } });
@@ -120,8 +126,10 @@ async function showEntity(config, targetId = 'view') {
   const rows = await call(api.list(config.endpoint));
   currentSort = { key: config.columns[0][0], direction: 1 };
   const filters = config.filters || [['Alle Datensätze','']];
-  document.getElementById(targetId).innerHTML = `<div class="card"><div class="card-body"><div class="d-flex flex-wrap gap-2 justify-content-between mb-3"><input class="form-control w-auto flex-grow-1" id="searchInput" placeholder="Suchen..."><select class="form-select w-auto" id="filterInput">${filters.map(([label, value]) => `<option value="${escapeHtml(value)}">${label}</option>`).join('')}</select><button class="btn btn-primary" id="newRecord"><i class="bi bi-plus-lg"></i> Neuer Datensatz</button></div><div id="tableHost"></div></div></div>`;
+  const importButton = config.endpoint === 'invoices' ? '<button class="btn btn-outline-info" id="invoiceImageImport"><i class="bi bi-file-earmark-image"></i> Bild importieren</button>' : '';
+  document.getElementById(targetId).innerHTML = `<div class="card"><div class="card-body"><div class="d-flex flex-wrap gap-2 justify-content-between mb-3"><input class="form-control w-auto flex-grow-1" id="searchInput" placeholder="Suchen..."><select class="form-select w-auto" id="filterInput">${filters.map(([label, value]) => `<option value="${escapeHtml(value)}">${label}</option>`).join('')}</select>${importButton}<button class="btn btn-primary" id="newRecord"><i class="bi bi-plus-lg"></i> Neuer Datensatz</button></div><div id="tableHost"></div></div></div>`;
   document.getElementById('newRecord').addEventListener('click', () => openForm(config, null));
+  document.getElementById('invoiceImageImport')?.addEventListener('click', openInvoiceImport);
   const render = () => renderTable(config, sortRows(filterRows(rows, document.getElementById('searchInput').value, document.getElementById('filterInput').value)), targetId);
   document.getElementById('searchInput').addEventListener('input', render);
   document.getElementById('filterInput').addEventListener('change', render);
@@ -131,10 +139,68 @@ async function showEntity(config, targetId = 'view') {
 function renderTable(config, rows, targetId) {
   const host = document.querySelector(`#${targetId} #tableHost`);
   if (!rows.length) { host.innerHTML = `<div class="empty-state">${config.empty}</div>`; return; }
-  host.innerHTML = `<div class="table-responsive"><table class="table table-hover align-middle mb-0"><thead><tr>${config.columns.map(([key, label]) => `<th><button class="btn btn-link btn-sm p-0 text-decoration-none text-light" data-sort="${key}">${label}${currentSort.key === key ? (currentSort.direction > 0 ? ' ↑' : ' ↓') : ''}</button></th>`).join('')}<th>Aktionen</th></tr></thead><tbody>${rows.map((row) => `<tr>${config.columns.map(([key]) => `<td>${cell(row, key)}</td>`).join('')}<td class="text-nowrap"><button class="btn btn-sm btn-outline-light me-1" data-edit="${row.id}"><i class="bi bi-pencil"></i></button><button class="btn btn-sm btn-outline-danger" data-delete="${row.id}"><i class="bi bi-trash"></i></button></td></tr>`).join('')}</tbody></table></div>`;
+  host.innerHTML = `<div class="table-responsive"><table class="table table-hover align-middle mb-0"><thead><tr>${config.columns.map(([key, label]) => `<th><button class="btn btn-link btn-sm p-0 text-decoration-none text-light" data-sort="${key}">${label}${currentSort.key === key ? (currentSort.direction > 0 ? ' ↑' : ' ↓') : ''}</button></th>`).join('')}<th>Aktionen</th></tr></thead><tbody>${rows.map((row) => `<tr>${config.columns.map(([key]) => `<td>${cell(row, key)}</td>`).join('')}<td class="text-nowrap">${config.endpoint === 'invoices' && row.image_path ? `<button class="btn btn-sm btn-outline-info me-1" data-open-image="${row.id}" title="Rechnungsbild öffnen"><i class="bi bi-image"></i></button>` : ''}<button class="btn btn-sm btn-outline-light me-1" data-edit="${row.id}"><i class="bi bi-pencil"></i></button><button class="btn btn-sm btn-outline-danger" data-delete="${row.id}"><i class="bi bi-trash"></i></button></td></tr>`).join('')}</tbody></table></div>`;
   host.querySelectorAll('[data-sort]').forEach((button) => button.addEventListener('click', () => { currentSort = { key: button.dataset.sort, direction: currentSort.key === button.dataset.sort ? currentSort.direction * -1 : 1 }; document.getElementById('searchInput').dispatchEvent(new Event('input')); }));
   host.querySelectorAll('[data-edit]').forEach((button) => button.addEventListener('click', async () => openForm(config, await call(api.get(config.endpoint, button.dataset.edit)))));
   host.querySelectorAll('[data-delete]').forEach((button) => button.addEventListener('click', () => deleteRecord(config, button.dataset.delete)));
+  host.querySelectorAll('[data-open-image]').forEach((button) => button.addEventListener('click', () => openInvoiceImage(button.dataset.openImage)));
+}
+
+async function openInvoiceImport() {
+  try {
+    const selected = await call(api.selectInvoiceImage());
+    if (selected.canceled) return;
+    showLoading('OCR läuft', 'Das Rechnungsbild wird analysiert. Bitte warten...');
+    const result = await call(api.analyzeSelectedInvoiceImage(selected.sourcePath));
+    invoiceImportSourcePath = result.sourcePath;
+    document.getElementById('invoiceImportPreview').src = result.imageDataUrl;
+    document.getElementById('invoiceImportText').textContent = result.text || 'Kein OCR-Text erkannt.';
+    document.getElementById('invoiceImportFields').innerHTML = invoiceFields(result.parsed || {}).map(importFieldHtml).join('');
+    invoiceImportModal.show();
+  } catch (error) { toast(error.message, 'danger'); }
+  finally { hideLoading(); }
+}
+
+function importFieldHtml(field) {
+  return fieldHtml({ ...field, w: 12 });
+}
+
+async function saveInvoiceImport(event) {
+  event.preventDefault();
+  try {
+    const data = invoiceImportData();
+    await call(api.createInvoiceFromImage(data));
+    invoiceImportModal.hide();
+    toast('Eingangsrechnung wurde aus dem Bild importiert.', 'success');
+    showEntity(configs.invoices, activeEntity === 'accounting' ? 'accountingView' : 'view');
+  } catch (error) { toast(error.message, 'danger'); }
+}
+
+function invoiceImportData() {
+  const data = { source_path: invoiceImportSourcePath };
+  document.querySelectorAll('#invoiceImportForm input, #invoiceImportForm select').forEach((el) => { if (el.name) data[el.name] = el.value; });
+  return data;
+}
+
+async function openInvoiceImage(id) {
+  try {
+    const result = await call(api.invoiceImage(id));
+    document.getElementById('invoiceImageTitle').textContent = `Rechnungsbild ${result.invoice_number || ''}`.trim();
+    document.getElementById('invoiceImagePreview').src = result.imageDataUrl;
+    invoiceImageModal.show();
+  } catch (error) { toast(error.message, 'danger'); }
+}
+
+function showLoading(title, text) {
+  document.getElementById('loadingTitle').textContent = title || 'Bitte warten';
+  document.getElementById('loadingText').textContent = text || 'Vorgang läuft...';
+  document.getElementById('loadingOverlay').classList.remove('d-none');
+  document.getElementById('loadingOverlay').classList.add('d-flex');
+}
+
+function hideLoading() {
+  document.getElementById('loadingOverlay').classList.add('d-none');
+  document.getElementById('loadingOverlay').classList.remove('d-flex');
 }
 
 function filterRows(rows, search, filter) {

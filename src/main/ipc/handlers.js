@@ -20,6 +20,12 @@ function registerIpcHandlers(db) {
   ipcMain.handle('entity:create', safe(({ entity, data }) => service.create(db, entity, data)));
   ipcMain.handle('entity:update', safe(({ entity, id, data }) => service.update(db, entity, id, data)));
   ipcMain.handle('entity:remove', safe(({ entity, id }) => service.remove(db, entity, id)));
+  ipcMain.handle('invoices:analyze-image', safe(() => service.analyzeInvoiceImage()));
+  ipcMain.handle('invoices:select-image', safe(() => service.selectInvoiceImage()));
+  ipcMain.handle('invoices:analyze-selected-image', safe(({ sourcePath }) => service.analyzeSelectedInvoiceImage(sourcePath)));
+  ipcMain.handle('invoices:create-from-image', safe(({ data }) => service.createInvoiceFromImageImport(db, data)));
+  ipcMain.handle('invoices:open-image', safe(({ id }) => service.openInvoiceImage(db, id)));
+  ipcMain.handle('invoices:image', safe(({ id }) => service.invoiceImage(db, id)));
   ipcMain.handle('orders:vehicle-options', safe((order) => service.vehicleOptions(db, order)));
   ipcMain.handle('orders:suggest-vehicles', safe((order) => service.suggestions(db, order)));
   ipcMain.handle('orders:options', safe(() => service.orderOptions(db)));
