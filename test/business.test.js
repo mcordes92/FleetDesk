@@ -84,6 +84,23 @@ test('warnt im Dashboard bei Auftrag ohne ausreichende Fahrzeugkapazitaet', () =
   db.close();
 });
 
+test('speichert Warnungseinstellungen und warnt nach Fahrzeugtyp-Schwellen', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fleetdesk-'));
+  const db = initializeDatabase(dir);
+  service.saveSettings(db, { warnings: { Lkw: { maintenanceDue: true, brakePercent: 50, enginePercent: 60, clutchPercent: 0, tirePercent: 40 }, Auflieger: { maintenanceDue: false, brakePercent: 90, enginePercent: 90, clutchPercent: 90, tirePercent: 90 } } });
+  service.create(db, 'vehicles', { name: 'Lkw Warnung', license_plate: 'KS-FD-W1', vehicle_type: 'Lkw', cargo_type: 'Pritsche', capacity_fe: 5, value: '1000', current_mileage: 12000, maintenance_interval_km: 5000, last_maintenance_mileage: 5000, brake_status: 45, engine_status: 55, clutch_status: 20, tire_status: 35, has_fax: true });
+  service.create(db, 'vehicles', { name: 'Auflieger ohne Warnung', license_plate: 'KS-FD-W2', vehicle_type: 'Auflieger', cargo_type: 'Pritsche', capacity_fe: 5, value: '1000', current_mileage: 12000, maintenance_interval_km: 5000, last_maintenance_mileage: 5000, brake_status: 10, tire_status: 10, has_fax: true });
+  const warnings = service.dashboard(db).warnings.join('\n');
+  assert.match(warnings, /Wartung bei Lkw Warnung/);
+  assert.match(warnings, /Bremsenstatus bei Lkw Warnung/);
+  assert.match(warnings, /Motorstatus bei Lkw Warnung/);
+  assert.match(warnings, /Reifenstatus bei Lkw Warnung/);
+  assert.match(warnings, /Bremsenstatus bei Auflieger ohne Warnung/);
+  assert.match(warnings, /Reifenstatus bei Auflieger ohne Warnung/);
+  assert.doesNotMatch(warnings, /Wartung bei Auflieger ohne Warnung/);
+  db.close();
+});
+
 test('verwaltet Standorte und liefert Kartendaten', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fleetdesk-'));
   const db = initializeDatabase(dir);

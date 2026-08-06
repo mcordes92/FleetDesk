@@ -79,7 +79,7 @@ function saveVehicle(db, id, data) {
   const isTrailer = ['Auflieger', 'Lkw-Anhänger'].includes(data.vehicle_type);
   const capacity = data.vehicle_type === 'Sattelzugmaschine' ? null : parseLocaleNumber(data.capacity_fe || 0);
   const location = id ? getLocationForVehicle(db, data.location_label || 'Hauptniederlassung Kassel') : getLocationForVehicle(db, 'Hauptniederlassung Kassel');
-  const row = { name: data.name.trim(), license_plate: data.license_plate.trim(), vehicle_type: data.vehicle_type, cargo_type: data.cargo_type, capacity_fe: capacity, value_cents: toCents(data.value), tank_size_liters: parseLocaleNumber(data.tank_size_liters || 0), fuel_consumption_l_100km: parseLocaleNumber(data.fuel_consumption_l_100km || 0), current_mileage: parseLocaleNumber(data.current_mileage || 0), maintenance_interval_km: parseLocaleNumber(data.maintenance_interval_km || 0), last_maintenance_mileage: parseLocaleNumber(data.last_maintenance_mileage || 0), brake_status: nullableNumber(data.brake_status), engine_status: isTrailer ? null : nullableNumber(data.engine_status), clutch_status: isTrailer ? null : nullableNumber(data.clutch_status), tire_status: nullableNumber(data.tire_status), has_fax: toBool(data.has_fax), has_tank_upgrade: toBool(data.has_tank_upgrade), location_label: location.name, latitude: location.latitude, longitude: location.longitude, available: data.available === undefined ? 1 : toBool(data.available) };
+  const row = { name: data.name.trim(), license_plate: data.license_plate.trim(), vehicle_type: data.vehicle_type, cargo_type: data.cargo_type, capacity_fe: capacity, value_cents: toCents(data.value), tank_size_liters: parseLocaleNumber(data.tank_size_liters || 0), fuel_consumption_l_100km: parseLocaleNumber(data.fuel_consumption_l_100km || 0), current_mileage: parseLocaleNumber(data.current_mileage || 0), maintenance_interval_km: parseLocaleNumber(data.maintenance_interval_km || 0), last_maintenance_mileage: parseLocaleNumber(data.last_maintenance_mileage || 0), brake_status: nullableNumber(data.brake_status), engine_status: isTrailer ? null : nullableNumber(data.engine_status), clutch_status: isTrailer ? null : nullableNumber(data.clutch_status), tire_status: nullableNumber(data.tire_status), has_fax: isTrailer ? 0 : toBool(data.has_fax), has_tank_upgrade: toBool(data.has_tank_upgrade), location_label: location.name, latitude: location.latitude, longitude: location.longitude, available: data.available === undefined ? 1 : toBool(data.available) };
   return runDbWrite(() => upsert(db, 'vehicles', id, row));
 }
 
@@ -98,7 +98,6 @@ function saveOrder(db, id, data) {
   return db.transaction(() => {
     const orderId = upsert(db, 'orders', id, row);
     replaceAssignments(db, orderId, data.vehicle_ids || []);
-    assertSufficientCapacity(db, orderId);
     if (row.status === 'geliefert') releaseOrderVehicles(db, orderId);
     return orderId;
   })();
@@ -216,18 +215,73 @@ function dashboard(db) {
   const invoices = list(db, 'invoices');
   const investments = list(db, 'investments');
   const pl = calculateProfitLoss(deliveryNotes, invoices);
+  const expectedIncomeCents = deliveryNotes.filter((row) => row.status === 'warte auf Zahlungseingang').reduce((sum, row) => sum + Number(row.revenue_cents || 0), 0);
+  const profitLoss = calculateProfitLossPeriods(deliveryNotes, invoices);
+  const warningSettings = getSettings(db).warnings;
   return {
     metrics: {
-      vehicles: vehicles.length, availableVehicles: vehicles.filter((v) => v.available).length, assignedVehicles: vehicles.filter((v) => !v.available).length, overdueMaintenance: vehicles.filter((v) => v.maintenance.remainingKm < 0).length, vehiclesWithoutFax: vehicles.filter((v) => !v.has_fax).length, personnel: db.prepare('SELECT COUNT(*) count FROM personnel').get().count, openOrders: orders.filter((o) => o.status === 'offen').length, activeOrders: orders.filter((o) => o.status === 'in Arbeit').length, storedOrders: orders.filter((o) => o.status === 'eingelagert').length, paidIncomeCents: pl.incomeCents, paidExpenseCents: pl.expenseCents, profitLossCents: pl.resultCents, investmentCostCents: investments.reduce((sum, item) => sum + item.cost_cents, 0)
+      vehicles: vehicles.length, availableVehicles: vehicles.filter((v) => v.available).length, assignedVehicles: vehicles.filter((v) => !v.available).length, overdueMaintenance: vehicles.filter((v) => v.maintenance.remainingKm < 0).length, vehiclesWithoutFax: vehicles.filter((v) => !v.has_fax && !isTrailer(v)).length, personnel: db.prepare('SELECT COUNT(*) count FROM personnel').get().count, openOrders: orders.filter((o) => o.status === 'offen').length, activeOrders: orders.filter((o) => o.status === 'in Arbeit').length, storedOrders: orders.filter((o) => o.status === 'eingelagert').length, expectedIncomeCents, paidIncomeCents: pl.incomeCents, paidExpenseCents: pl.expenseCents, profitLossCents: pl.resultCents, investmentCostCents: investments.reduce((sum, item) => sum + item.cost_cents, 0)
     },
+    profitLoss,
     warnings: [
-      ...vehicles.filter((v) => v.maintenance.remainingKm < 0).map((v) => `Wartung bei ${v.name} ${v.maintenance.label}.`),
-      ...vehicles.filter((v) => !v.has_fax).map((v) => `${v.name} hat kein Fax eingebaut.`),
+      ...vehicleWarnings(vehicles, warningSettings),
+      ...vehicles.filter((v) => !v.has_fax && !isTrailer(v)).map((v) => `${v.name} hat kein Fax eingebaut.`),
       ...deliveryNotes.filter((n) => n.status === 'überfällig').map((n) => `Lieferschein ${n.order_number} ist ueberfaellig.`),
       ...invoices.filter((i) => i.payment_status === 'überfällig').map((i) => `Eingangsrechnung ${i.invoice_number} ist ueberfaellig.`),
       ...orders.filter((o) => o.status !== 'geliefert' && Number(o.assigned_capacity_fe || 0) < Number(o.cargo_amount_fe || 0)).map((o) => `Auftrag ${o.order_number} hat keine ausreichende Fahrzeugkapazitaet.`)
     ]
   };
+}
+
+function getSettings(db) {
+  const row = db.prepare('SELECT value FROM app_settings WHERE key=?').get('settings');
+  if (!row) return defaultSettings();
+  try { return normalizeSettings(JSON.parse(row.value)); } catch (_error) { return defaultSettings(); }
+}
+
+function saveSettings(db, settings) {
+  const normalized = normalizeSettings(settings);
+  db.prepare('INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=CURRENT_TIMESTAMP').run('settings', JSON.stringify(normalized));
+  return normalized;
+}
+
+function defaultSettings() {
+  return { warnings: Object.fromEntries(VEHICLE_TYPES.map((type) => [type, { maintenanceDue: true, brakePercent: 0, enginePercent: 0, clutchPercent: 0, tirePercent: 0 }])) };
+}
+
+function normalizeSettings(settings) {
+  const defaults = defaultSettings();
+  const source = settings && typeof settings === 'object' ? settings : {};
+  const warnings = {};
+  VEHICLE_TYPES.forEach((type) => {
+    const row = source.warnings?.[type] || {};
+    warnings[type] = {
+      maintenanceDue: row.maintenanceDue === undefined ? defaults.warnings[type].maintenanceDue : Boolean(row.maintenanceDue),
+      brakePercent: clampPercent(row.brakePercent),
+      enginePercent: clampPercent(row.enginePercent),
+      clutchPercent: clampPercent(row.clutchPercent),
+      tirePercent: clampPercent(row.tirePercent)
+    };
+  });
+  return { warnings };
+}
+
+function vehicleWarnings(vehicles, settings) {
+  return vehicles.flatMap((vehicle) => {
+    const config = settings[vehicle.vehicle_type] || {};
+    const warnings = [];
+    if (config.maintenanceDue && vehicle.maintenance.remainingKm < 0) warnings.push(`Wartung bei ${vehicle.name} ${vehicle.maintenance.label}.`);
+    addStatusWarning(warnings, vehicle, 'brake_status', 'Bremsenstatus', config.brakePercent);
+    addStatusWarning(warnings, vehicle, 'engine_status', 'Motorstatus', config.enginePercent);
+    addStatusWarning(warnings, vehicle, 'clutch_status', 'Kupplungsstatus', config.clutchPercent);
+    addStatusWarning(warnings, vehicle, 'tire_status', 'Reifenstatus', config.tirePercent);
+    return warnings;
+  });
+}
+
+function addStatusWarning(warnings, vehicle, key, label, threshold) {
+  if (!threshold || vehicle[key] == null) return;
+  if (Number(vehicle[key]) < threshold) warnings.push(`${label} bei ${vehicle.name} unter ${threshold} Prozent (${vehicle[key]} Prozent).`);
 }
 
 function backupDatabase(db) {
@@ -304,6 +358,47 @@ function assertSufficientCapacity(db, orderId) {
   if (assigned.count > 0 && Number(assigned.capacity || 0) < Number(order.cargo_amount_fe || 0)) throw new Error('Die ausgewaehlten Fahrzeuge haben keine ausreichende Kapazitaet fuer diesen Auftrag.');
 }
 
+function calculateProfitLossPeriods(deliveryNotes, invoices) {
+  const now = new Date();
+  const currentKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const months = new Map();
+  const years = new Map();
+  deliveryNotes.filter((row) => row.status === 'bezahlt').forEach((row) => addProfitLossEntry(months, years, row.created_at, Number(row.revenue_cents || 0), 0));
+  invoices.filter((row) => row.payment_status === 'bezahlt').forEach((row) => addProfitLossEntry(months, years, row.invoice_date || row.created_at, 0, Number(row.amount_cents || 0)));
+  const monthRows = profitLossRows(months, true);
+  const yearRows = profitLossRows(years, false);
+  const currentMonth = monthRows.find((row) => row.key === currentKey) || { key: currentKey, label: formatPeriodLabel(currentKey, true), incomeCents: 0, expenseCents: 0, resultCents: 0 };
+  return { currentMonth, months: monthRows, years: yearRows };
+}
+
+function addProfitLossEntry(months, years, dateValue, incomeCents, expenseCents) {
+  const iso = String(dateValue || '').slice(0, 10);
+  if (!/^\d{4}-\d{2}/.test(iso)) return;
+  const monthKey = iso.slice(0, 7);
+  const yearKey = iso.slice(0, 4);
+  addPeriod(months, monthKey, incomeCents, expenseCents);
+  addPeriod(years, yearKey, incomeCents, expenseCents);
+}
+
+function addPeriod(map, key, incomeCents, expenseCents) {
+  const row = map.get(key) || { key, incomeCents: 0, expenseCents: 0 };
+  row.incomeCents += incomeCents;
+  row.expenseCents += expenseCents;
+  map.set(key, row);
+}
+
+function profitLossRows(map, monthly) {
+  return [...map.values()].sort((a, b) => b.key.localeCompare(a.key)).map((row) => ({ ...row, label: formatPeriodLabel(row.key, monthly), resultCents: row.incomeCents - row.expenseCents }));
+}
+
+function formatPeriodLabel(key, monthly) {
+  if (!monthly) return key;
+  const [year, month] = key.split('-');
+  return `${month}.${year}`;
+}
+
+function isTrailer(vehicle) { return ['Auflieger', 'Lkw-Anhänger'].includes(vehicle.vehicle_type); }
+
 function runDbWrite(callback) {
   try { return callback(); } catch (error) {
     if (String(error.message).includes('UNIQUE constraint failed')) throw new Error('Ein Datensatz mit diesem eindeutigen Wert existiert bereits.');
@@ -312,6 +407,7 @@ function runDbWrite(callback) {
 }
 
 function nullableNumber(value) { return value === '' || value === undefined || value === null ? null : parseLocaleNumber(value); }
+function clampPercent(value) { const number = nullableNumber(value); return number == null || Number.isNaN(number) ? 0 : Math.min(100, Math.max(0, number)); }
 function ensureEntity(entity) { if (!TABLES[entity]) throw new Error('Unbekannter Verwaltungsbereich.'); }
 
-module.exports = { list, get, create, update, remove, dashboard, vehicleOptions, suggestions, orderOptions, locationOptions, geocodeLocation, geocodeAddress, mapData, exportDatabase, importDatabase, backupDatabase, validateImportDatabase, relaunchApp };
+module.exports = { list, get, create, update, remove, dashboard, getSettings, saveSettings, vehicleOptions, suggestions, orderOptions, locationOptions, geocodeLocation, geocodeAddress, mapData, exportDatabase, importDatabase, backupDatabase, validateImportDatabase, relaunchApp };

@@ -7,9 +7,12 @@ let modal;
 let vehicleChoices;
 let currentSort = { key: null, direction: 1 };
 let currentMap;
+let startupWarningSoundPlayed = false;
+
+const vehicleTypes = ['Lkw','Lkw-Anhänger','Sattelzugmaschine','Auflieger','Kleintransporter','Gigaliner'];
 
 const navItems = [
-  ['dashboard', 'Übersicht', 'bi-speedometer2'], ['vehicles', 'Fuhrpark', 'bi-truck'], ['personnel', 'Personal', 'bi-people'], ['orders', 'Auftragsbuch', 'bi-journal-text'], ['accounting', 'Buchhaltung', 'bi-calculator'], ['investments', 'Investitionen', 'bi-graph-up-arrow'], ['locations', 'Standorte', 'bi-geo-alt'], ['map', 'Karte', 'bi-map'], ['data', 'Datenverwaltung', 'bi-database']
+  ['dashboard', 'Übersicht', 'bi-speedometer2'], ['vehicles', 'Fuhrpark', 'bi-truck'], ['personnel', 'Personal', 'bi-people'], ['orders', 'Auftragsbuch', 'bi-journal-text'], ['accounting', 'Buchhaltung', 'bi-calculator'], ['investments', 'Investitionen', 'bi-graph-up-arrow'], ['locations', 'Standorte', 'bi-geo-alt'], ['map', 'Karte', 'bi-map'], ['settings', 'Einstellungen', 'bi-gear'], ['data', 'Datenverwaltung', 'bi-database']
 ];
 
 const configs = {
@@ -43,6 +46,7 @@ function navigate(key) {
   if (key === 'dashboard') return showDashboard();
   if (key === 'accounting') return showAccounting();
   if (key === 'map') return showMap();
+  if (key === 'settings') return showSettings();
   if (key === 'data') return showDataManagement();
   return showEntity(configs[key]);
 }
@@ -56,8 +60,40 @@ async function call(promise) {
 async function showDashboard() {
   activeEntity = 'dashboard'; setTitle('Übersicht', 'Kennzahlen und Warnungen');
   const data = await call(api.dashboard());
-  const metricLabels = { vehicles: 'Fahrzeuge', availableVehicles: 'Verfügbar', assignedVehicles: 'Im Auftrag', overdueMaintenance: 'Wartung überfällig', vehiclesWithoutFax: 'Ohne Fax', personnel: 'Mitarbeiter', openOrders: 'Offene Aufträge', activeOrders: 'In Arbeit', storedOrders: 'Eingelagert', paidIncomeCents: 'Bezahlte Einnahmen', paidExpenseCents: 'Bezahlte Aufwendungen', profitLossCents: 'Gewinn/Verlust', investmentCostCents: 'Investitionen' };
+  playStartupWarningSound(data.warnings);
+  const metricLabels = { vehicles: 'Fahrzeuge', availableVehicles: 'Verfügbar', assignedVehicles: 'Im Auftrag', overdueMaintenance: 'Wartung überfällig', vehiclesWithoutFax: 'Ohne Fax', personnel: 'Mitarbeiter', openOrders: 'Offene Aufträge', activeOrders: 'In Arbeit', storedOrders: 'Eingelagert', expectedIncomeCents: 'Erwarteter Gewinn', paidIncomeCents: 'Bezahlte Einnahmen', paidExpenseCents: 'Bezahlte Aufwendungen', profitLossCents: 'Gewinn/Verlust', investmentCostCents: 'Investitionen' };
   document.getElementById('view').innerHTML = `<div class="row g-3">${Object.entries(data.metrics).map(([key, value]) => `<div class="col-12 col-md-6 col-xl-3"><div class="card metric h-100"><div class="card-body"><div class="text-secondary small">${metricLabels[key]}</div><div class="fs-3 fw-bold">${key.endsWith('Cents') ? fmt.money(value) : fmt.number(value)}</div></div></div></div>`).join('')}</div><div class="card mt-4"><div class="card-header"><i class="bi bi-exclamation-triangle me-2"></i>Wichtige Warnungen</div><div class="card-body">${data.warnings.length ? `<ul class="mb-0">${data.warnings.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>` : '<div class="empty-state">Keine aktuellen Warnungen.</div>'}</div></div>`;
+}
+
+async function showSettings() {
+  activeEntity = 'settings'; setTitle('Einstellungen', 'Warnungen und Anwendungsvorgaben');
+  const settings = await call(api.getSettings());
+  document.getElementById('view').innerHTML = `<div class="card"><div class="card-body"><ul class="nav nav-tabs" role="tablist"><li class="nav-item" role="presentation"><button class="nav-link active" id="warnings-tab" data-bs-toggle="tab" data-bs-target="#warningsPane" type="button" role="tab">Warnungen</button></li></ul><div class="tab-content pt-3"><div class="tab-pane fade show active" id="warningsPane" role="tabpanel" aria-labelledby="warnings-tab"><form id="warningSettingsForm"><p class="text-secondary">Schwellenwert 0 deaktiviert die jeweilige Statuswarnung. Wartungswarnungen gelten pro Fahrzeugtyp separat.</p><div class="table-responsive"><table class="table table-hover align-middle mb-0"><thead><tr><th>Fahrzeugtyp</th><th>Fällige Wartung</th><th>Bremsen unter %</th><th>Motor unter %</th><th>Kupplung unter %</th><th>Reifen unter %</th></tr></thead><tbody>${vehicleTypes.map((type) => warningSettingsRow(type, settings.warnings[type] || {})).join('')}</tbody></table></div><div class="d-flex justify-content-end mt-3"><button type="submit" class="btn btn-primary"><i class="bi bi-save"></i> Einstellungen speichern</button></div></form></div></div></div></div>`;
+  document.getElementById('warningSettingsForm').addEventListener('submit', saveWarningSettings);
+}
+
+function warningSettingsRow(type, row) {
+  return `<tr data-vehicle-type="${escapeHtml(type)}"><td class="fw-semibold">${escapeHtml(type)}</td><td><div class="form-check form-switch"><input class="form-check-input" type="checkbox" name="maintenanceDue" ${row.maintenanceDue ? 'checked' : ''}></div></td><td>${thresholdInput('brakePercent', row.brakePercent)}</td><td>${thresholdInput('enginePercent', row.enginePercent)}</td><td>${thresholdInput('clutchPercent', row.clutchPercent)}</td><td>${thresholdInput('tirePercent', row.tirePercent)}</td></tr>`;
+}
+
+function thresholdInput(name, value) {
+  return `<input class="form-control form-control-sm" type="number" min="0" max="100" step="any" inputmode="decimal" name="${name}" value="${escapeHtml(value ?? 0)}">`;
+}
+
+async function saveWarningSettings(event) {
+  event.preventDefault();
+  const warnings = {};
+  document.querySelectorAll('#warningSettingsForm [data-vehicle-type]').forEach((row) => {
+    warnings[row.dataset.vehicleType] = {
+      maintenanceDue: row.querySelector('[name="maintenanceDue"]').checked,
+      brakePercent: inputNumber(row.querySelector('[name="brakePercent"]').value),
+      enginePercent: inputNumber(row.querySelector('[name="enginePercent"]').value),
+      clutchPercent: inputNumber(row.querySelector('[name="clutchPercent"]').value),
+      tirePercent: inputNumber(row.querySelector('[name="tirePercent"]').value)
+    };
+  });
+  await call(api.saveSettings({ warnings }));
+  toast('Einstellungen wurden gespeichert.', 'success');
 }
 
 function showAccounting() {
@@ -70,7 +106,13 @@ function showAccounting() {
 
 async function showProfitLoss() {
   const dash = await call(api.dashboard());
-  document.getElementById('accountingView').innerHTML = `<div class="row g-3"><div class="col-md-4"><div class="card"><div class="card-body"><div class="text-secondary">Einnahmen</div><div class="fs-3">${fmt.money(dash.metrics.paidIncomeCents)}</div></div></div></div><div class="col-md-4"><div class="card"><div class="card-body"><div class="text-secondary">Aufwendungen</div><div class="fs-3">${fmt.money(dash.metrics.paidExpenseCents)}</div></div></div></div><div class="col-md-4"><div class="card"><div class="card-body"><div class="text-secondary">Gewinn oder Verlust</div><div class="fs-3 ${dash.metrics.profitLossCents < 0 ? 'text-danger' : 'text-success'}">${fmt.money(dash.metrics.profitLossCents)}</div></div></div></div></div>`;
+  const current = dash.profitLoss.currentMonth;
+  document.getElementById('accountingView').innerHTML = `<div class="row g-3"><div class="col-md-4"><div class="card"><div class="card-body"><div class="text-secondary">Einnahmen aktueller Monat</div><div class="fs-3">${fmt.money(current.incomeCents)}</div></div></div></div><div class="col-md-4"><div class="card"><div class="card-body"><div class="text-secondary">Aufwendungen aktueller Monat</div><div class="fs-3">${fmt.money(current.expenseCents)}</div></div></div></div><div class="col-md-4"><div class="card"><div class="card-body"><div class="text-secondary">GuV aktueller Monat</div><div class="fs-3 ${current.resultCents < 0 ? 'text-danger' : 'text-success'}">${fmt.money(current.resultCents)}</div></div></div></div></div><div class="row g-3 mt-1"><div class="col-lg-7"><div class="card h-100"><div class="card-header">Monatsstatistik</div><div class="card-body p-0">${profitLossTable(dash.profitLoss.months, 'Monat')}</div></div></div><div class="col-lg-5"><div class="card h-100"><div class="card-header">Jahresstatistik</div><div class="card-body p-0">${profitLossTable(dash.profitLoss.years, 'Jahr')}</div></div></div></div>`;
+}
+
+function profitLossTable(rows, label) {
+  if (!rows.length) return '<div class="empty-state m-3">Keine bezahlten Einnahmen oder Aufwendungen vorhanden.</div>';
+  return `<div class="table-responsive border-0"><table class="table table-hover align-middle mb-0"><thead><tr><th>${label}</th><th>Einnahmen</th><th>Aufwendungen</th><th>Ergebnis</th></tr></thead><tbody>${rows.map((row) => `<tr><td>${escapeHtml(row.label)}</td><td>${fmt.money(row.incomeCents)}</td><td>${fmt.money(row.expenseCents)}</td><td class="${row.resultCents < 0 ? 'text-danger' : 'text-success'}">${fmt.money(row.resultCents)}</td></tr>`).join('')}</tbody></table></div>`;
 }
 
 async function showEntity(config, targetId = 'view') {
@@ -101,7 +143,7 @@ function filterRows(rows, search, filter) {
     if (!filter) return true;
     if (filter === 'available:true') return row.available;
     if (filter === 'available:false') return !row.available;
-    if (filter === 'has_fax:false') return !row.has_fax;
+    if (filter === 'has_fax:false') return !row.has_fax && !isTrailer(row);
     if (filter === 'maintenance:overdue') return row.maintenance?.remainingKm < 0;
     if (filter === 'capacity:insufficient') return Number(row.assigned_capacity_fe || 0) < Number(row.cargo_amount_fe || 0) && row.status !== 'geliefert';
     if (filter === 'coordinates:ok') return row.latitude != null && row.longitude != null;
@@ -132,7 +174,7 @@ function cell(row, key) {
   if (key === 'available') return badge(row.available ? 'verfügbar' : 'im Auftrag', row.available ? 'success' : 'warning');
   if (key === 'has_adr_training') return fmt.bool(row[key]);
   if (key === 'maintenance') return row.maintenance ? badge(row.maintenance.label, row.maintenance.remainingKm < 0 ? 'danger' : 'success') : '';
-  if (key === 'warning') return !row.has_fax ? badge('Kein Fax', 'warning') : badge('OK', 'success');
+  if (key === 'warning') return !row.has_fax && !isTrailer(row) ? badge('Kein Fax', 'warning') : badge('OK', 'success');
   if (key === 'revenue_cents' || key === 'amount_cents' || key === 'salary_cents' || key === 'cost_cents') return fmt.money(row[key]);
   if (key === 'success_rate') return fmt.percent(row[key]);
   if (key === 'coordinates') return row.latitude == null || row.longitude == null ? badge('Nicht geocodiert', 'warning') : `${fmt.number(row.latitude, 5)}, ${fmt.number(row.longitude, 5)}`;
@@ -163,7 +205,8 @@ function fieldHtml(field) {
   if (field.type === 'geocodebutton') return `<div class="col-md-${field.w || 4} d-flex align-items-end"><button type="button" class="btn btn-outline-info w-100" id="modalGeocode"><i class="bi bi-crosshair"></i> Adresse suchen</button></div>`;
   if (field.type === 'multiselect') return `<div class="col-12"><label class="form-label">${field.label}</label><select class="form-select" name="${field.name}" multiple></select><div id="suggestions" class="small text-secondary mt-2"></div></div>`;
   if (field.type === 'calculated') return `<div class="col-md-${field.w || 4}"><label class="form-label">${field.label}</label><input class="form-control" name="${field.name}" value="${escapeHtml(value)}" readonly></div>`;
-  return `<div class="col-md-${field.w || 4}"><label class="form-label">${field.label}${field.required ? ' *' : ''}</label><input class="form-control" type="${field.type || 'text'}" name="${field.name}" value="${escapeHtml(value)}" ${required} ${field.readonly ? 'readonly' : ''}></div>`;
+  const step = field.step ? `step="${escapeHtml(field.step)}" inputmode="decimal"` : '';
+  return `<div class="col-md-${field.w || 4}"><label class="form-label">${field.label}${field.required ? ' *' : ''}</label><input class="form-control" type="${field.type || 'text'}" name="${field.name}" value="${escapeHtml(value)}" ${required} ${field.readonly ? 'readonly' : ''} ${step}></div>`;
 }
 
 async function initChoices(row) {
@@ -244,6 +287,8 @@ function applyDynamicRules() {
   const data = formData();
   const capacity = document.querySelector('[name="capacity_fe"]');
   if (capacity) { capacity.disabled = data.vehicle_type === 'Sattelzugmaschine'; if (capacity.disabled) capacity.value = ''; }
+  const fax = document.querySelector('[name="has_fax"]');
+  if (fax) { fax.disabled = ['Auflieger','Lkw-Anhänger'].includes(data.vehicle_type); if (fax.disabled) fax.checked = false; }
   ['engine_status','clutch_status'].forEach((name) => { const input = document.querySelector(`[name="${name}"]`); if (input) { input.disabled = ['Auflieger','Lkw-Anhänger'].includes(data.vehicle_type); if (input.disabled) input.value = ''; } });
   const adr = document.querySelector('[name="has_adr_training"]'); if (adr) { adr.disabled = data.position !== 'Lkw-Fahrer'; if (adr.disabled) adr.checked = false; }
   const deliveryDate = document.querySelector('[name="delivery_date"]'); if (deliveryDate) { deliveryDate.disabled = data.order_type !== 'Lagervertrag'; if (deliveryDate.disabled) deliveryDate.value = ''; }
@@ -346,6 +391,26 @@ async function geocodeLocation(config, id) {
 async function runDataAction(promise, message) { try { const result = await call(promise); if (!result.canceled) toast(message, 'success'); return result; } catch (error) { toast(error.message, 'danger'); return null; } }
 function setTitle(title, subtitle) { document.getElementById('pageTitle').textContent = title; document.getElementById('pageSubtitle').textContent = subtitle; }
 function badge(text, color) { return `<span class="badge text-bg-${color}">${escapeHtml(text)}</span>`; }
+function isTrailer(row) { return ['Auflieger', 'Lkw-Anhänger'].includes(row.vehicle_type); }
+function playStartupWarningSound(warnings) {
+  if (startupWarningSoundPlayed || !warnings.length) return;
+  startupWarningSoundPlayed = true;
+  try {
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContext) return;
+    const context = new AudioContext();
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+    oscillator.type = 'sine';
+    oscillator.frequency.value = 880;
+    gain.gain.setValueAtTime(0.0001, context.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.08, context.currentTime + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.25);
+    oscillator.connect(gain).connect(context.destination);
+    oscillator.start();
+    oscillator.stop(context.currentTime + 0.28);
+  } catch (_error) {}
+}
 function escapeHtml(value) { return String(value).replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char])); }
 function toast(message, type) { const id = `toast-${Date.now()}`; document.getElementById('toasts').insertAdjacentHTML('beforeend', `<div id="${id}" class="toast text-bg-${type} border-0" role="alert"><div class="d-flex"><div class="toast-body">${escapeHtml(message)}</div><button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button></div></div>`); new bootstrap.Toast(document.getElementById(id)).show(); }
 
@@ -357,7 +422,7 @@ function invoiceFields(row) { return [text('invoice_number','Rechnungsnummer',ro
 function investmentFields(row) { return [select('measure','Massnahme',['Flyer','Tageszeitung','Radiowerbung','Filmwerbung','Fernsehwerbung','große Werbekampagne'],row.measure,true), check('scope_regional','Regional',row.scope_regional), check('scope_national','National',row.scope_national), check('scope_international','International',row.scope_international), calc('investment_preview','Erfolgsquote und Kosten')]; }
 function locationFields(row) { return [text('name','Standortname',row.name,true,4), text('address','Adresse oder Suchbegriff',row.address,true,5), { type:'geocodebutton', w: 3 }, hidden('latitude', row.latitude), hidden('longitude', row.longitude), hidden('geocoding_status', row.geocoding_status || 'unbekannt'), { type:'calculated', name:'coordinate_preview', label:'Koordinaten', value: row.latitude == null || row.longitude == null ? 'Noch nicht geocodiert' : `${fmt.number(row.latitude, 5)}, ${fmt.number(row.longitude, 5)}`, w: 6 }]; }
 function text(name,label,value,required,w,readonly){ return { type:'text', name, label, value, required, w, readonly }; }
-function num(name,label,value,required,w){ return { type:'number', name, label, value: value ?? '', required, w }; }
+function num(name,label,value,required,w){ return { type:'number', name, label, value: value ?? '', required, w, step: 'any' }; }
 function money(name,label,cents,required,w){ return { type:'text', name, label, value: fmt.inputMoney(cents), required, w }; }
 function date(name,label,value,required,w){ return { type:'date', name, label, value: value || '', required, w }; }
 function select(name,label,options,value,required,w){ return { type:'select', name, label, options, value: value || options[0], required, w }; }
