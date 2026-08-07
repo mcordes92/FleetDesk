@@ -8,7 +8,7 @@ const { resolveCoordinates, geocodeWithOpenStreetMap } = require('./geocodingSer
 const { VEHICLE_TYPES, CARGO_TYPES, PERSONNEL_POSITIONS, ORDER_TYPES, ORDER_STATUSES, DELIVERY_NOTE_STATUSES, INVOICE_STATUSES, assertRequired, assertOneOf, assertNonNegative, assertPercent, toBool, toCents, parseLocaleNumber, calculateMaintenance, calculateRevenue, calculateInvestment, calculateProfitLoss, calculateUtilization, haversineKm, suggestVehicleCombinations } = require('../../shared/business');
 
 const TABLES = {
-  vehicles: 'vehicles', personnel: 'personnel', orders: 'orders', deliveryNotes: 'delivery_notes', invoices: 'invoices', investments: 'investments', locations: 'locations'
+  vehicles: 'vehicles', personnel: 'personnel', orders: 'orders', deliveryNotes: 'delivery_notes', invoices: 'invoices', investments: 'investments', locations: 'locations', frameworkContracts: 'framework_contracts'
 };
 
 function nowUpdate(table) { return `updated_at = CURRENT_TIMESTAMP`; }
@@ -17,7 +17,7 @@ function stripId(row) { const { id, created_at, updated_at, ...rest } = row; ret
 function list(db, entity) {
   ensureEntity(entity);
   if (entity === 'orders') return db.prepare(`SELECT o.*, COALESCE(group_concat(v.name || ' (' || v.license_plate || ')', ', '), '') assigned_vehicles, COALESCE(SUM(CASE WHEN a.active=1 THEN v.capacity_fe ELSE 0 END), 0) assigned_capacity_fe FROM orders o LEFT JOIN order_vehicle_assignments a ON a.order_id=o.id AND a.active=1 LEFT JOIN vehicles v ON v.id=a.vehicle_id GROUP BY o.id ORDER BY o.updated_at DESC`).all().map(enrichOrder);
-  if (entity === 'vehicles') return db.prepare(`SELECT v.*, COALESCE(o.order_number || ' · ' || o.customer, '') assigned_order FROM vehicles v LEFT JOIN order_vehicle_assignments a ON a.vehicle_id=v.id AND a.active=1 LEFT JOIN orders o ON o.id=a.order_id AND o.status!='geliefert' ORDER BY v.updated_at DESC`).all().map((row) => enrich(entity, row));
+  if (entity === 'vehicles') return db.prepare(`SELECT v.*, COALESCE((SELECT o.order_number || ' · ' || o.customer FROM order_vehicle_assignments a JOIN orders o ON o.id=a.order_id WHERE a.vehicle_id=v.id AND a.active=1 AND o.status!='geliefert' ORDER BY a.assigned_at DESC LIMIT 1), '') assigned_order, EXISTS(SELECT 1 FROM order_vehicle_assignments a JOIN orders o ON o.id=a.order_id WHERE a.vehicle_id=v.id AND a.active=1 AND o.status!='geliefert') has_active_assignment FROM vehicles v ORDER BY v.updated_at DESC`).all().map((row) => enrich(entity, row));
   return db.prepare(`SELECT * FROM ${TABLES[entity]} ORDER BY updated_at DESC`).all().map((row) => enrich(entity, row));
 }
 
@@ -74,7 +74,7 @@ function remove(db, entity, id) {
 }
 
 function save(db, entity, id, data) {
-  const handlers = { vehicles: saveVehicle, personnel: savePersonnel, orders: saveOrder, deliveryNotes: saveDeliveryNote, invoices: saveInvoice, investments: saveInvestment, locations: saveLocation };
+  const handlers = { vehicles: saveVehicle, personnel: savePersonnel, orders: saveOrder, deliveryNotes: saveDeliveryNote, invoices: saveInvoice, investments: saveInvestment, locations: saveLocation, frameworkContracts: saveFrameworkContract };
   const savedId = handlers[entity](db, id, data || {});
   return get(db, entity, savedId);
 }
@@ -98,8 +98,21 @@ function savePersonnel(db, id, data) {
 
 function saveOrder(db, id, data) {
   assertRequired(data.order_number, 'Auftragsnummer'); assertRequired(data.customer, 'Kunde'); assertRequired(data.start_location, 'Startort'); assertRequired(data.delivery_location, 'Lieferort'); assertOneOf(data.order_type, ORDER_TYPES, 'Auftragsart'); assertOneOf(data.cargo_type, CARGO_TYPES, 'Frachttyp'); assertOneOf(data.status, ORDER_STATUSES, 'Auftragsstatus');
+  assertOneOf(data.final_stop_mode || 'zielort', ['startort', 'niederlassung', 'zielort'], 'Abstellort');
   ['distance_km','cargo_amount_fe','unit_price'].forEach((key) => assertNonNegative(data[key], key));
-  const row = { order_number: data.order_number.trim(), order_type: data.order_type, customer: data.customer.trim(), start_location: data.start_location.trim(), delivery_location: data.delivery_location.trim(), return_to_kassel: toBool(data.return_to_kassel), distance_km: parseLocaleNumber(data.distance_km || 0), delivery_deadline: data.delivery_deadline || null, adr_required: toBool(data.adr_required), delivery_date: data.order_type === 'Lagervertrag' ? (data.delivery_date || null) : null, cargo_type: data.cargo_type, cargo_amount_fe: parseLocaleNumber(data.cargo_amount_fe || 0), unit_price_cents: toCents(data.unit_price), status: data.status };
+  const frameworkContractId = nullableNumber(data.framework_contract_id);
+  const frameworkContract = data.order_type === 'Teilabruf' && frameworkContractId
+    ? db.prepare('SELECT * FROM framework_contracts WHERE id=? AND active=1').get(frameworkContractId)
+    : null;
+  if (data.order_type === 'Teilabruf' && frameworkContractId && !frameworkContract) throw new Error('Der ausgewaehlte Rahmenvertrag ist nicht aktiv oder nicht vorhanden.');
+  const customer = frameworkContract?.customer || data.customer;
+  const startLocation = frameworkContract?.start_location || data.start_location;
+  const deliveryLocation = frameworkContract?.delivery_location || data.delivery_location;
+  const cargoType = frameworkContract?.cargo_type || data.cargo_type;
+  const unitPriceCents = frameworkContract ? Number(frameworkContract.unit_price_cents || 0) : toCents(data.unit_price);
+  const returnToStart = toBool(data.return_to_start);
+  const finalStopMode = returnToStart ? 'startort' : (data.final_stop_mode || (data.return_to_kassel ? 'niederlassung' : 'zielort'));
+  const row = { order_number: data.order_number.trim(), order_type: data.order_type, customer: String(customer).trim(), start_location: String(startLocation).trim(), delivery_location: String(deliveryLocation).trim(), return_to_kassel: toBool(finalStopMode === 'niederlassung'), return_to_start: returnToStart, final_stop_mode: finalStopMode, framework_contract_id: frameworkContractId, distance_km: parseLocaleNumber(data.distance_km || 0), delivery_deadline: data.delivery_deadline || null, adr_required: toBool(data.adr_required), delivery_date: data.order_type === 'Lagervertrag' ? (data.delivery_date || null) : null, cargo_type: cargoType, cargo_amount_fe: parseLocaleNumber(data.cargo_amount_fe || 0), unit_price_cents: unitPriceCents, status: data.status };
   if (row.delivery_deadline) assertDate(row.delivery_deadline, 'Lieferfrist');
   if (row.delivery_date) assertDate(row.delivery_date, 'Liefertermin');
   return db.transaction(() => {
@@ -112,14 +125,41 @@ function saveOrder(db, id, data) {
 
 function saveDeliveryNote(db, id, data) {
   assertRequired(data.order_number, 'Auftragsnummer'); assertRequired(data.debtor, 'Debitor'); assertRequired(data.goods, 'Ware'); assertOneOf(data.status, DELIVERY_NOTE_STATUSES, 'Status'); assertNonNegative(data.cargo_amount_fe, 'Frachtmenge'); assertNonNegative(data.revenue, 'Umsatz');
-  return runDbWrite(() => upsert(db, 'delivery_notes', id, { order_id: data.order_id || null, order_number: data.order_number.trim(), debtor: data.debtor.trim(), goods: data.goods.trim(), cargo_amount_fe: parseLocaleNumber(data.cargo_amount_fe || 0), revenue_cents: toCents(data.revenue), status: data.status }));
+  return runDbWrite(() => db.transaction(() => {
+    const previous = id ? db.prepare('SELECT paid_at, status FROM delivery_notes WHERE id=?').get(id) : null;
+    const paidAt = data.status === 'bezahlt' ? (previous?.paid_at || new Date().toISOString()) : null;
+    const savedId = upsert(db, 'delivery_notes', id, { order_id: data.order_id || null, order_number: data.order_number.trim(), debtor: data.debtor.trim(), goods: data.goods.trim(), cargo_amount_fe: parseLocaleNumber(data.cargo_amount_fe || 0), revenue_cents: toCents(data.revenue), status: data.status, paid_at: paidAt });
+    if (data.order_id) archiveOrder(db, data.order_id);
+    return savedId;
+  })());
+}
+
+function saveFrameworkContract(db, id, data) {
+  assertRequired(data.contract_number, 'Rahmenvertragsnummer');
+  assertRequired(data.customer, 'Kunde');
+  assertRequired(data.start_location, 'Abholort');
+  assertRequired(data.delivery_location, 'Lieferort');
+  assertOneOf(data.cargo_type, CARGO_TYPES, 'Frachttyp');
+  assertNonNegative(data.unit_price, 'Einzelpreis');
+  return runDbWrite(() => upsert(db, 'framework_contracts', id, {
+    contract_number: data.contract_number.trim(),
+    customer: data.customer.trim(),
+    start_location: data.start_location.trim(),
+    delivery_location: data.delivery_location.trim(),
+    cargo_type: data.cargo_type,
+    unit_price_cents: toCents(data.unit_price),
+    active: toBool(data.active !== false),
+    notes: data.notes ? String(data.notes).trim() : null
+  }));
 }
 
 function saveInvoice(db, id, data) {
   assertRequired(data.invoice_number, 'Rechnungsnummer'); assertRequired(data.creditor, 'Kreditor'); assertRequired(data.item, 'Posten'); assertRequired(data.invoice_date, 'Datum'); assertRequired(data.due_date, 'Faelligkeit'); assertOneOf(data.payment_status, INVOICE_STATUSES, 'Zahlungsstatus'); assertNonNegative(data.amount, 'Betrag');
   assertDate(data.invoice_date, 'Datum'); assertDate(data.due_date, 'Faelligkeit');
   const status = data.payment_status !== 'bezahlt' && data.due_date < new Date().toISOString().slice(0, 10) ? 'überfällig' : data.payment_status;
-  const row = { invoice_number: data.invoice_number.trim(), creditor: data.creditor.trim(), item: data.item.trim(), amount_cents: toCents(data.amount), invoice_date: data.invoice_date, due_date: data.due_date, payment_status: status };
+  const previous = id ? db.prepare('SELECT paid_at, payment_status FROM invoices WHERE id=?').get(id) : null;
+  const paidAt = status === 'bezahlt' ? (previous?.paid_at || new Date().toISOString()) : null;
+  const row = { invoice_number: data.invoice_number.trim(), creditor: data.creditor.trim(), item: data.item.trim(), amount_cents: toCents(data.amount), invoice_date: data.invoice_date, due_date: data.due_date, payment_status: status, paid_at: paidAt };
   if (data.image_path !== undefined) row.image_path = data.image_path || null;
   return runDbWrite(() => upsert(db, 'invoices', id, row));
 }
@@ -343,7 +383,8 @@ function replaceAssignments(db, orderId, vehicleIds) {
 
 function releaseOrderVehicles(db, orderId) {
   const order = db.prepare('SELECT * FROM orders WHERE id=?').get(orderId);
-  const location = order.return_to_kassel ? 'Hauptniederlassung Kassel' : order.start_location;
+  const mode = order.return_to_start ? 'startort' : (order.final_stop_mode || (order.return_to_kassel ? 'niederlassung' : 'zielort'));
+  const location = mode === 'startort' ? order.start_location : mode === 'niederlassung' ? 'Hauptniederlassung Kassel' : order.delivery_location;
   const coords = resolveCoordinates(db, location);
   db.prepare('UPDATE order_vehicle_assignments SET active=0, released_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE order_id=? AND active=1').run(orderId);
   db.prepare('UPDATE vehicles SET available=1, location_label=?, latitude=?, longitude=?, updated_at=CURRENT_TIMESTAMP WHERE id IN (SELECT vehicle_id FROM order_vehicle_assignments WHERE order_id=?)').run(location, coords?.latitude ?? null, coords?.longitude ?? null, orderId);
@@ -355,7 +396,21 @@ function vehicleOptions(db, order) {
 }
 
 function orderOptions(db) {
-  return list(db, 'orders').map((order) => ({ id: order.id, order_number: order.order_number, customer: order.customer, cargo_amount_fe: order.cargo_amount_fe, revenue_cents: order.revenue_cents, cargo_type: order.cargo_type }));
+  return db.prepare(`SELECT o.*, COALESCE(SUM(CASE WHEN a.active=1 THEN v.capacity_fe ELSE 0 END), 0) assigned_capacity_fe
+    FROM orders o
+    LEFT JOIN order_vehicle_assignments a ON a.order_id=o.id AND a.active=1
+    LEFT JOIN vehicles v ON v.id=a.vehicle_id
+    WHERE COALESCE(o.archived, 0)=0
+      AND NOT EXISTS(SELECT 1 FROM delivery_notes d WHERE d.order_id=o.id)
+    GROUP BY o.id
+    ORDER BY o.updated_at DESC`).all().map((order) => {
+    const enriched = enrichOrder(order);
+    return { id: enriched.id, order_number: enriched.order_number, customer: enriched.customer, cargo_amount_fe: enriched.cargo_amount_fe, revenue_cents: enriched.revenue_cents, cargo_type: enriched.cargo_type };
+  });
+}
+
+function frameworkContractOptions(db) {
+  return db.prepare('SELECT id, contract_number, customer, start_location, delivery_location, cargo_type, unit_price_cents FROM framework_contracts WHERE active=1 ORDER BY updated_at DESC').all();
 }
 
 function locationOptions(db) {
@@ -396,6 +451,7 @@ function suggestions(db, order) {
 function dashboard(db) {
   const vehicles = list(db, 'vehicles');
   const orders = list(db, 'orders');
+  const activeOrders = orders.filter((order) => !order.archived);
   const deliveryNotes = list(db, 'deliveryNotes');
   const invoices = list(db, 'invoices');
   const investments = list(db, 'investments');
@@ -405,7 +461,7 @@ function dashboard(db) {
   const warningSettings = getSettings(db).warnings;
   return {
     metrics: {
-      vehicles: vehicles.length, availableVehicles: vehicles.filter((v) => v.available).length, assignedVehicles: vehicles.filter((v) => !v.available).length, overdueMaintenance: vehicles.filter((v) => v.maintenance.remainingKm < 0).length, vehiclesWithoutFax: vehicles.filter((v) => !v.has_fax && !isTrailer(v)).length, personnel: db.prepare('SELECT COUNT(*) count FROM personnel').get().count, openOrders: orders.filter((o) => o.status === 'offen').length, activeOrders: orders.filter((o) => o.status === 'in Arbeit').length, storedOrders: orders.filter((o) => o.status === 'eingelagert').length, expectedIncomeCents, paidIncomeCents: pl.incomeCents, paidExpenseCents: pl.expenseCents, profitLossCents: pl.resultCents, investmentCostCents: investments.reduce((sum, item) => sum + item.cost_cents, 0)
+      vehicles: vehicles.length, availableVehicles: vehicles.filter((v) => v.available).length, assignedVehicles: vehicles.filter((v) => !v.available).length, overdueMaintenance: vehicles.filter((v) => v.maintenance.remainingKm < 0).length, vehiclesWithoutFax: vehicles.filter((v) => !v.has_fax && !isTrailer(v)).length, personnel: db.prepare('SELECT COUNT(*) count FROM personnel').get().count, openOrders: activeOrders.filter((o) => o.status === 'offen').length, activeOrders: activeOrders.filter((o) => o.status === 'in Arbeit').length, storedOrders: activeOrders.filter((o) => o.status === 'eingelagert').length, expectedIncomeCents, paidIncomeCents: pl.incomeCents, paidExpenseCents: pl.expenseCents, profitLossCents: pl.resultCents, investmentCostCents: investments.reduce((sum, item) => sum + item.cost_cents, 0)
     },
     profitLoss,
     warnings: [
@@ -413,7 +469,7 @@ function dashboard(db) {
       ...vehicles.filter((v) => !v.has_fax && !isTrailer(v)).map((v) => `${v.name} hat kein Fax eingebaut.`),
       ...deliveryNotes.filter((n) => n.status === 'überfällig').map((n) => `Lieferschein ${n.order_number} ist ueberfaellig.`),
       ...invoices.filter((i) => i.payment_status === 'überfällig').map((i) => `Eingangsrechnung ${i.invoice_number} ist ueberfaellig.`),
-      ...orders.filter((o) => o.status !== 'geliefert' && Number(o.assigned_capacity_fe || 0) < Number(o.cargo_amount_fe || 0)).map((o) => `Auftrag ${o.order_number} hat keine ausreichende Fahrzeugkapazitaet.`)
+      ...activeOrders.filter((o) => o.status !== 'geliefert' && Number(o.assigned_capacity_fe || 0) < Number(o.cargo_amount_fe || 0)).map((o) => `Auftrag ${o.order_number} hat keine ausreichende Fahrzeugkapazitaet.`)
     ]
   };
 }
@@ -496,7 +552,7 @@ async function importDatabase(db) {
 function validateImportDatabase(filePath) {
   const imported = new Database(filePath, { readonly: true, fileMustExist: true });
   try {
-    const required = ['vehicles','personnel','orders','order_vehicle_assignments','delivery_notes','invoices','investments','geocoding_cache','app_settings','schema_migrations','locations'];
+    const required = ['vehicles','personnel','orders','order_vehicle_assignments','delivery_notes','invoices','investments','geocoding_cache','app_settings','schema_migrations','locations','framework_contracts'];
     const tables = new Set(imported.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map((row) => row.name));
     for (const table of required) if (!tables.has(table)) throw new Error(`Importdatenbank enthaelt die Tabelle ${table} nicht.`);
     const version = imported.prepare('SELECT MAX(version) version FROM schema_migrations').get().version;
@@ -506,13 +562,18 @@ function validateImportDatabase(filePath) {
 }
 
 function enrich(entity, row) {
-  if (entity === 'vehicles') return { ...row, available: Boolean(row.available), has_fax: Boolean(row.has_fax), has_tank_upgrade: Boolean(row.has_tank_upgrade), maintenance: calculateMaintenance(row.current_mileage, row.maintenance_interval_km, row.last_maintenance_mileage) };
+  if (entity === 'vehicles') return { ...row, available: row.has_active_assignment === undefined ? Boolean(row.available) : !Boolean(row.has_active_assignment), has_fax: Boolean(row.has_fax), has_tank_upgrade: Boolean(row.has_tank_upgrade), maintenance: calculateMaintenance(row.current_mileage, row.maintenance_interval_km, row.last_maintenance_mileage) };
   if (entity === 'orders') return enrichOrder(row);
   if (entity === 'investments') { const calc = calculateInvestment(row.measure, { regional: row.scope_regional, national: row.scope_national, international: row.scope_international }); return { ...row, scope_regional: Boolean(row.scope_regional), scope_national: Boolean(row.scope_national), scope_international: Boolean(row.scope_international), success_rate: calc.successRate, cost_cents: calc.costCents }; }
+  if (entity === 'frameworkContracts') return { ...row, active: Boolean(row.active) };
   return row;
 }
 
-function enrichOrder(row) { return { ...row, return_to_kassel: Boolean(row.return_to_kassel), adr_required: Boolean(row.adr_required), revenue_cents: calculateRevenue(row.cargo_amount_fe, row.distance_km, row.unit_price_cents), utilization: calculateUtilization(row.cargo_amount_fe, row.assigned_capacity_fe) }; }
+function enrichOrder(row) {
+  const returnToStart = Boolean(row.return_to_start);
+  const finalStopMode = returnToStart ? 'startort' : (row.final_stop_mode || (row.return_to_kassel ? 'niederlassung' : 'zielort'));
+  return { ...row, return_to_kassel: Boolean(row.return_to_kassel), return_to_start: returnToStart, final_stop_mode: finalStopMode, archived: Boolean(row.archived), adr_required: Boolean(row.adr_required), revenue_cents: calculateRevenue(row.cargo_amount_fe, row.distance_km, row.unit_price_cents), utilization: calculateUtilization(row.cargo_amount_fe, row.assigned_capacity_fe) };
+}
 function relaunchApp() {
   app.relaunch();
   app.exit(0);
@@ -548,8 +609,8 @@ function calculateProfitLossPeriods(deliveryNotes, invoices) {
   const currentKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
   const months = new Map();
   const years = new Map();
-  deliveryNotes.filter((row) => row.status === 'bezahlt').forEach((row) => addProfitLossEntry(months, years, row.created_at, Number(row.revenue_cents || 0), 0));
-  invoices.filter((row) => row.payment_status === 'bezahlt').forEach((row) => addProfitLossEntry(months, years, row.invoice_date || row.created_at, 0, Number(row.amount_cents || 0)));
+  deliveryNotes.filter((row) => isPaidStatus(row.status)).forEach((row) => addProfitLossEntry(months, years, row.paid_at || row.updated_at || row.created_at, Number(row.revenue_cents || 0), 0));
+  invoices.filter((row) => isPaidStatus(row.payment_status)).forEach((row) => addProfitLossEntry(months, years, row.paid_at || row.updated_at || row.invoice_date || row.created_at, 0, Number(row.amount_cents || 0)));
   const monthRows = profitLossRows(months, true);
   const yearRows = profitLossRows(years, false);
   const currentMonth = monthRows.find((row) => row.key === currentKey) || { key: currentKey, label: formatPeriodLabel(currentKey, true), incomeCents: 0, expenseCents: 0, resultCents: 0 };
@@ -584,6 +645,15 @@ function formatPeriodLabel(key, monthly) {
 
 function isTrailer(vehicle) { return ['Auflieger', 'Lkw-Anhänger'].includes(vehicle.vehicle_type); }
 
+function archiveOrder(db, orderId) {
+  db.prepare('UPDATE orders SET archived=1, archived_at=COALESCE(archived_at, CURRENT_TIMESTAMP), updated_at=CURRENT_TIMESTAMP WHERE id=?').run(orderId);
+}
+
+function isPaidStatus(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  return normalized === 'bezahlt';
+}
+
 function runDbWrite(callback) {
   try { return callback(); } catch (error) {
     if (String(error.message).includes('UNIQUE constraint failed')) throw new Error('Ein Datensatz mit diesem eindeutigen Wert existiert bereits.');
@@ -595,4 +665,4 @@ function nullableNumber(value) { return value === '' || value === undefined || v
 function clampPercent(value) { const number = nullableNumber(value); return number == null || Number.isNaN(number) ? 0 : Math.min(100, Math.max(0, number)); }
 function ensureEntity(entity) { if (!TABLES[entity]) throw new Error('Unbekannter Verwaltungsbereich.'); }
 
-module.exports = { list, get, create, update, remove, dashboard, getSettings, saveSettings, vehicleOptions, suggestions, orderOptions, locationOptions, geocodeLocation, geocodeAddress, mapData, exportDatabase, importDatabase, backupDatabase, validateImportDatabase, relaunchApp, analyzeInvoiceImage, selectInvoiceImage, analyzeSelectedInvoiceImage, createInvoiceFromImageImport, openInvoiceImage, invoiceImage };
+module.exports = { list, get, create, update, remove, dashboard, getSettings, saveSettings, vehicleOptions, suggestions, orderOptions, frameworkContractOptions, locationOptions, geocodeLocation, geocodeAddress, mapData, exportDatabase, importDatabase, backupDatabase, validateImportDatabase, relaunchApp, analyzeInvoiceImage, selectInvoiceImage, analyzeSelectedInvoiceImage, createInvoiceFromImageImport, openInvoiceImage, invoiceImage };

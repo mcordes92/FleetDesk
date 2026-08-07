@@ -60,7 +60,10 @@ function calculateMaintenance(currentMileage, intervalKm, lastMaintenanceMileage
 }
 
 function calculateRevenue(cargoAmountFe, distanceKm, unitPriceCents) {
-  return Math.round(Number(cargoAmountFe || 0) * Number(distanceKm || 0) * Number(unitPriceCents || 0));
+  const cargo = parseLocaleNumber(cargoAmountFe || 0);
+  const distance = parseLocaleNumber(distanceKm || 0);
+  const unitPrice = parseLocaleNumber(unitPriceCents || 0);
+  return Math.round(Number(cargo || 0) * Number(distance || 0) * Number(unitPrice || 0));
 }
 
 function calculateInvestment(measure, scopes) {
@@ -72,9 +75,12 @@ function calculateInvestment(measure, scopes) {
 }
 
 function calculateProfitLoss(deliveryNotes, invoices) {
-  const incomeCents = deliveryNotes.filter((row) => row.status === 'bezahlt').reduce((sum, row) => sum + Number(row.revenue_cents || 0), 0);
-  const expenseCents = invoices.filter((row) => row.payment_status === 'bezahlt').reduce((sum, row) => sum + Number(row.amount_cents || 0), 0);
-  return { incomeCents, expenseCents, resultCents: incomeCents - expenseCents, paidDeliveryNotes: deliveryNotes.filter((row) => row.status === 'bezahlt').length, paidInvoices: invoices.filter((row) => row.payment_status === 'bezahlt').length };
+  const isPaid = (value) => String(value || '').trim().toLowerCase() === 'bezahlt';
+  const incomeRows = deliveryNotes.filter((row) => isPaid(row.status));
+  const expenseRows = invoices.filter((row) => isPaid(row.payment_status));
+  const incomeCents = incomeRows.reduce((sum, row) => sum + Number(row.revenue_cents || 0), 0);
+  const expenseCents = expenseRows.reduce((sum, row) => sum + Number(row.amount_cents || 0), 0);
+  return { incomeCents, expenseCents, resultCents: incomeCents - expenseCents, paidDeliveryNotes: incomeRows.length, paidInvoices: expenseRows.length };
 }
 
 function calculateUtilization(cargoAmountFe, capacityFe) {

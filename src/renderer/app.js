@@ -15,13 +15,14 @@ let startupWarningSoundPlayed = false;
 const vehicleTypes = ['Lkw','Lkw-Anhänger','Sattelzugmaschine','Auflieger','Kleintransporter','Gigaliner'];
 
 const navItems = [
-  ['dashboard', 'Übersicht', 'bi-speedometer2'], ['vehicles', 'Fuhrpark', 'bi-truck'], ['personnel', 'Personal', 'bi-people'], ['orders', 'Auftragsbuch', 'bi-journal-text'], ['accounting', 'Buchhaltung', 'bi-calculator'], ['investments', 'Investitionen', 'bi-graph-up-arrow'], ['locations', 'Standorte', 'bi-geo-alt'], ['map', 'Karte', 'bi-map'], ['settings', 'Einstellungen', 'bi-gear'], ['data', 'Datenverwaltung', 'bi-database']
+  ['dashboard', 'Übersicht', 'bi-speedometer2'], ['vehicles', 'Fuhrpark', 'bi-truck'], ['personnel', 'Personal', 'bi-people'], ['frameworkContracts', 'Rahmenverträge', 'bi-file-earmark-text'], ['orders', 'Auftragsbuch', 'bi-journal-text'], ['accounting', 'Buchhaltung', 'bi-calculator'], ['investments', 'Investitionen', 'bi-graph-up-arrow'], ['locations', 'Standorte', 'bi-geo-alt'], ['map', 'Karte', 'bi-map'], ['settings', 'Einstellungen', 'bi-gear'], ['data', 'Datenverwaltung', 'bi-database']
 ];
 
 const configs = {
   vehicles: { title: 'Fuhrpark', subtitle: 'Fahrzeuge, Wartung, Standorte und Verfügbarkeit', endpoint: 'vehicles', empty: 'Noch keine Fahrzeuge angelegt.', columns: [['name','Name'], ['license_plate','Kennzeichen'], ['vehicle_type','Fahrzeugtyp'], ['cargo_type','Frachttyp'], ['capacity_fe','Kapazität'], ['current_mileage','Kilometer'], ['maintenance','Nächste Wartung'], ['location_label','Standort'], ['available','Verfügbarkeit'], ['assigned_order','Zugeordneter Auftrag'], ['warning','Warnstatus']], filters: [['Alle Verfügbarkeiten',''], ['Verfügbar','available:true'], ['Im Auftrag','available:false'], ['Ohne Fax','has_fax:false'], ['Wartung überfällig','maintenance:overdue']], fields: vehicleFields },
   personnel: { title: 'Personal', subtitle: 'Mitarbeitende, Gehälter und ADR-Schulungen', endpoint: 'personnel', empty: 'Noch kein Personal angelegt.', columns: [['personnel_number','Personalnummer'], ['name','Name'], ['hire_date','Einstellung'], ['salary_cents','Gehalt'], ['position','Position'], ['has_adr_training','ADR-Schulung']], fields: personnelFields },
-  orders: { title: 'Auftragsbuch', subtitle: 'Aufträge, Fahrzeugzuordnungen und Auslastung', endpoint: 'orders', empty: 'Noch keine Aufträge angelegt.', columns: [['order_number','Auftragsnummer'], ['order_type','Auftragsart'], ['customer','Kunde'], ['start_location','Startort'], ['delivery_location','Lieferort'], ['distance_km','Entfernung'], ['cargo_type','Frachttyp'], ['cargo_amount_fe','Frachtmenge'], ['revenue_cents','Gesamtumsatz'], ['status','Status'], ['assigned_vehicles','Fahrzeuge'], ['utilization','Auslastung']], filters: [['Alle Status',''], ['Offen','status:offen'], ['In Arbeit','status:in Arbeit'], ['Eingelagert','status:eingelagert'], ['Geliefert','status:geliefert'], ['Kapazität unzureichend','capacity:insufficient']], fields: orderFields },
+  frameworkContracts: { title: 'Rahmenverträge', subtitle: 'Aktive Rahmenverträge verwalten und für Teilabrufe verwenden', endpoint: 'frameworkContracts', empty: 'Noch keine Rahmenverträge angelegt.', columns: [['contract_number','Vertragsnummer'], ['customer','Kunde'], ['start_location','Abholort'], ['delivery_location','Lieferort'], ['cargo_type','Frachttyp'], ['unit_price_cents','Einzelpreis'], ['active','Aktiv']], filters: [['Alle Verträge',''], ['Aktiv','active:true'], ['Inaktiv','active:false']], fields: frameworkContractFields },
+  orders: { title: 'Auftragsbuch', subtitle: 'Aufträge, Fahrzeugzuordnungen und Auslastung', endpoint: 'orders', empty: 'Noch keine Aufträge angelegt.', columns: [['order_number','Auftragsnummer'], ['order_type','Auftragsart'], ['customer','Kunde'], ['start_location','Startort'], ['delivery_location','Lieferort'], ['final_stop_mode','Abstellort'], ['distance_km','Entfernung'], ['cargo_type','Frachttyp'], ['cargo_amount_fe','Frachtmenge'], ['revenue_cents','Gesamtumsatz'], ['status','Status'], ['archived','Archiv'], ['assigned_vehicles','Fahrzeuge'], ['utilization','Auslastung']], filters: [['Aktive Aufträge','archived:false'], ['Archivierte Aufträge','archived:true'], ['Alle Aufträge',''], ['Offen','status:offen'], ['In Arbeit','status:in Arbeit'], ['Eingelagert','status:eingelagert'], ['Geliefert','status:geliefert'], ['Kapazität unzureichend','capacity:insufficient']], fields: orderFields },
   deliveryNotes: { title: 'Lieferscheine', subtitle: 'Debitoren, Umsätze und Zahlungsstatus', endpoint: 'deliveryNotes', empty: 'Noch keine Lieferscheine angelegt.', columns: [['order_number','Auftragsnummer'], ['debtor','Debitor'], ['goods','Ware'], ['cargo_amount_fe','Frachtmenge'], ['revenue_cents','Umsatz'], ['status','Status']], fields: deliveryNoteFields },
   invoices: { title: 'Eingangsrechnungen', subtitle: 'Kreditoren, Beträge und Fälligkeiten', endpoint: 'invoices', empty: 'Noch keine Eingangsrechnungen angelegt.', columns: [['invoice_number','Rechnungsnummer'], ['creditor','Kreditor'], ['item','Posten'], ['amount_cents','Betrag'], ['invoice_date','Datum'], ['due_date','Fälligkeit'], ['payment_status','Zahlungsstatus']], fields: invoiceFields },
   investments: { title: 'Investitionen', subtitle: 'Werbemassnahmen, Erfolgsquoten und Kosten', endpoint: 'investments', empty: 'Noch keine Investitionen angelegt.', columns: [['measure','Massnahme'], ['scope','Werbeumfang'], ['success_rate','Erfolgsquote'], ['cost_cents','Kosten']], fields: investmentFields },
@@ -214,6 +215,10 @@ function filterRows(rows, search, filter) {
     if (filter === 'capacity:insufficient') return Number(row.assigned_capacity_fe || 0) < Number(row.cargo_amount_fe || 0) && row.status !== 'geliefert';
     if (filter === 'coordinates:ok') return row.latitude != null && row.longitude != null;
     if (filter === 'coordinates:missing') return row.latitude == null || row.longitude == null;
+    if (filter === 'active:true') return row.active;
+    if (filter === 'active:false') return !row.active;
+    if (filter === 'archived:true') return row.archived;
+    if (filter === 'archived:false') return !row.archived;
     if (filter.startsWith('status:')) return row.status === filter.slice(7);
     return true;
   });
@@ -238,6 +243,8 @@ function cell(row, key) {
   if (key.includes('cents')) return fmt.money(row[key]);
   if (key.includes('date') || key.includes('deadline')) return fmt.date(row[key]);
   if (key === 'available') return badge(row.available ? 'verfügbar' : 'im Auftrag', row.available ? 'success' : 'warning');
+  if (key === 'active') return badge(row.active ? 'aktiv' : 'inaktiv', row.active ? 'success' : 'secondary');
+  if (key === 'archived') return badge(row.archived ? 'archiviert' : 'aktiv', row.archived ? 'secondary' : 'success');
   if (key === 'has_adr_training') return fmt.bool(row[key]);
   if (key === 'maintenance') return row.maintenance ? badge(row.maintenance.label, row.maintenance.remainingKm < 0 ? 'danger' : 'success') : '';
   if (key === 'warning') return !row.has_fax && !isTrailer(row) ? badge('Kein Fax', 'warning') : badge('OK', 'success');
@@ -247,17 +254,34 @@ function cell(row, key) {
   if (key === 'geocoding_status') return badge(row[key] || 'unbekannt', row[key] === 'ok' ? 'success' : 'warning');
   if (key === 'scope') return ['Regional','National','International'].filter((label) => row[`scope_${label.toLowerCase()}`]).join(', ');
   if (key === 'utilization') return row.assigned_capacity_fe ? badge(fmt.percent(row.utilization), row.utilization > 100 ? 'warning' : 'info') : badge('Keine Kapazität', 'secondary');
+  if (key === 'final_stop_mode') {
+    if (row.final_stop_mode === 'startort') return 'Startort';
+    if (row.final_stop_mode === 'niederlassung') return 'Niederlassung';
+    return 'Zielort';
+  }
   return escapeHtml(row[key] ?? '');
 }
 
 function openForm(config, row) {
   editingId = row?.id || null; dirty = false;
   document.getElementById('modalTitle').textContent = editingId ? `${config.title} bearbeiten` : `${config.title} anlegen`;
+  const form = document.getElementById('recordForm');
   document.getElementById('formFields').innerHTML = config.fields(row || {}).map(fieldHtml).join('');
-  document.getElementById('recordForm').dataset.entity = config.endpoint;
-  document.getElementById('recordForm').dataset.config = Object.keys(configs).find((key) => configs[key] === config) || config.endpoint;
-  document.querySelectorAll('#recordForm input, #recordForm select').forEach((input) => input.addEventListener('input', () => { dirty = true; applyDynamicRules(); }));
-  applyDynamicRules(); initChoices(row); initOrderSelect(); initLocationSelect(); initModalGeocode(); modal.show();
+  form.dataset.entity = config.endpoint;
+  form.dataset.config = Object.keys(configs).find((key) => configs[key] === config) || config.endpoint;
+  form.querySelectorAll('input, select, textarea').forEach((input) => {
+    input.addEventListener('input', () => { dirty = true; applyDynamicRules(); });
+    input.addEventListener('change', () => { dirty = true; applyDynamicRules(); });
+  });
+  applyDynamicRules();
+  if (config.endpoint === 'orders') {
+    initChoices(row).catch((error) => toast(error.message, 'danger'));
+    initFrameworkContractSelect().catch((error) => toast(error.message, 'danger'));
+  }
+  if (config.endpoint === 'deliveryNotes') initOrderSelect().catch((error) => toast(error.message, 'danger'));
+  if (config.endpoint === 'vehicles') initLocationSelect().catch((error) => toast(error.message, 'danger'));
+  if (config.endpoint === 'locations') initModalGeocode();
+  modal.show();
 }
 
 function fieldHtml(field) {
@@ -266,11 +290,13 @@ function fieldHtml(field) {
   if (field.type === 'checkbox') return `<div class="col-md-4"><div class="form-check mt-4"><input class="form-check-input" type="checkbox" id="${field.name}" name="${field.name}" ${value ? 'checked' : ''}><label class="form-check-label" for="${field.name}">${field.label}</label></div></div>`;
   if (field.type === 'select') return `<div class="col-md-${field.w || 4}"><label class="form-label">${field.label}${field.required ? ' *' : ''}</label><select class="form-select" name="${field.name}" ${required}>${field.options.map((option) => `<option value="${escapeHtml(option)}" ${option === value ? 'selected' : ''}>${escapeHtml(option)}</option>`).join('')}</select></div>`;
   if (field.type === 'orderselect') return `<div class="col-md-${field.w || 4}"><label class="form-label">${field.label}</label><select class="form-select" name="${field.name}" data-current="${escapeHtml(value)}"><option value="">Manuelle Eingabe</option></select></div>`;
+  if (field.type === 'contractselect') return `<div class="col-md-${field.w || 4}"><label class="form-label">${field.label}</label><select class="form-select" name="${field.name}" data-current="${escapeHtml(value)}"><option value="">Kein Rahmenvertrag</option></select><div class="form-text">Bei Teilabruf werden Kunde, Orte, Frachttyp und Einzelpreis aus dem Vertrag übernommen.</div></div>`;
   if (field.type === 'locationselect') return `<div class="col-md-${field.w || 4}"><label class="form-label">${field.label}${field.required ? ' *' : ''}</label><select class="form-select" name="${field.name}" data-current="${escapeHtml(value)}" ${required}></select><div class="form-text">Standorte werden in der Standortverwaltung gepflegt.</div></div>`;
   if (field.type === 'hidden') return `<input type="hidden" name="${field.name}" value="${escapeHtml(value)}">`;
   if (field.type === 'geocodebutton') return `<div class="col-md-${field.w || 4} d-flex align-items-end"><button type="button" class="btn btn-outline-info w-100" id="modalGeocode"><i class="bi bi-crosshair"></i> Adresse suchen</button></div>`;
   if (field.type === 'multiselect') return `<div class="col-12"><label class="form-label">${field.label}</label><select class="form-select" name="${field.name}" multiple></select><div id="suggestions" class="small text-secondary mt-2"></div></div>`;
   if (field.type === 'calculated') return `<div class="col-md-${field.w || 4}"><label class="form-label">${field.label}</label><input class="form-control" name="${field.name}" value="${escapeHtml(value)}" readonly></div>`;
+  if (field.type === 'textarea') return `<div class="col-md-${field.w || 12}"><label class="form-label">${field.label}${field.required ? ' *' : ''}</label><textarea class="form-control" name="${field.name}" rows="3" ${required}>${escapeHtml(value)}</textarea></div>`;
   const step = field.step ? `step="${escapeHtml(field.step)}" inputmode="decimal"` : '';
   return `<div class="col-md-${field.w || 4}"><label class="form-label">${field.label}${field.required ? ' *' : ''}</label><input class="form-control" type="${field.type || 'text'}" name="${field.name}" value="${escapeHtml(value)}" ${required} ${field.readonly ? 'readonly' : ''} ${step}></div>`;
 }
@@ -316,6 +342,26 @@ async function initOrderSelect() {
   });
 }
 
+async function initFrameworkContractSelect() {
+  const select = document.querySelector('select[name="framework_contract_id"]');
+  if (!select || !select.hasAttribute('data-current')) return;
+  const contracts = await call(api.frameworkContractOptions());
+  const current = select.dataset.current;
+  select.innerHTML += contracts.map((contract) => `<option value="${contract.id}" ${String(contract.id) === current ? 'selected' : ''} data-contract="${escapeHtml(JSON.stringify(contract))}">${escapeHtml(contract.contract_number)} · ${escapeHtml(contract.customer)} · ${fmt.money(contract.unit_price_cents)}</option>`).join('');
+  select.addEventListener('change', () => {
+    const option = select.selectedOptions[0];
+    if (!option?.dataset.contract) return;
+    const contract = JSON.parse(option.dataset.contract);
+    setInput('customer', contract.customer);
+    setInput('start_location', contract.start_location);
+    setInput('delivery_location', contract.delivery_location);
+    setInput('cargo_type', contract.cargo_type);
+    setInput('unit_price', fmt.inputMoney(contract.unit_price_cents));
+    dirty = true;
+    applyDynamicRules();
+  });
+}
+
 async function initLocationSelect() {
   const select = document.querySelector('select[name="location_label"]');
   if (!select || !select.hasAttribute('data-current')) return;
@@ -358,6 +404,13 @@ function applyDynamicRules() {
   ['engine_status','clutch_status'].forEach((name) => { const input = document.querySelector(`[name="${name}"]`); if (input) { input.disabled = ['Auflieger','Lkw-Anhänger'].includes(data.vehicle_type); if (input.disabled) input.value = ''; } });
   const adr = document.querySelector('[name="has_adr_training"]'); if (adr) { adr.disabled = data.position !== 'Lkw-Fahrer'; if (adr.disabled) adr.checked = false; }
   const deliveryDate = document.querySelector('[name="delivery_date"]'); if (deliveryDate) { deliveryDate.disabled = data.order_type !== 'Lagervertrag'; if (deliveryDate.disabled) deliveryDate.value = ''; }
+  const contractSelect = document.querySelector('[name="framework_contract_id"]'); if (contractSelect) { contractSelect.disabled = data.order_type !== 'Teilabruf'; if (contractSelect.disabled) contractSelect.value = ''; }
+  const returnToStart = document.querySelector('[name="return_to_start"]');
+  const finalStop = document.querySelector('[name="final_stop_mode"]');
+  if (returnToStart && finalStop) {
+    finalStop.disabled = returnToStart.checked;
+    if (returnToStart.checked) finalStop.value = 'startort';
+  }
   const maintenance = document.querySelector('[name="maintenance_preview"]'); if (maintenance) maintenance.value = maintenancePreview(data);
   const revenue = document.querySelector('[name="revenue_preview"]'); if (revenue) revenue.value = fmt.money(Math.round(inputNumber(data.cargo_amount_fe) * inputNumber(data.distance_km) * inputMoneyCents(data.unit_price)));
   const investment = document.querySelector('[name="investment_preview"]'); if (investment) investment.value = investmentPreview(data);
@@ -398,7 +451,7 @@ function formData() {
     else if (el.multiple) data[el.name] = Array.from(el.selectedOptions).map((option) => Number(option.value));
     else data[el.name] = el.value;
   });
-  ['has_fax','has_tank_upgrade','has_adr_training','return_to_kassel','adr_required','scope_regional','scope_national','scope_international'].forEach((key) => { if (!(key in data) && document.querySelector(`[name="${key}"]`)) data[key] = false; });
+  ['has_fax','has_tank_upgrade','has_adr_training','return_to_kassel','return_to_start','adr_required','scope_regional','scope_national','scope_international','active'].forEach((key) => { if (!(key in data) && document.querySelector(`[name="${key}"]`)) data[key] = false; });
   return data;
 }
 
@@ -482,11 +535,12 @@ function toast(message, type) { const id = `toast-${Date.now()}`; document.getEl
 
 function vehicleFields(row) { return [text('name','Name',row.name,true), text('license_plate','Kennzeichen',row.license_plate,true), select('vehicle_type','Fahrzeugtyp', ['Lkw','Lkw-Anhänger','Sattelzugmaschine','Auflieger','Kleintransporter','Gigaliner'], row.vehicle_type, true), select('cargo_type','Frachttyp',['Pritsche','Tank','Vieh','Silo','Kühl','Tieflader','Universal'],row.cargo_type,true), num('capacity_fe','Kapazität in FE',row.capacity_fe), money('value','Wert in Euro',row.value_cents), num('tank_size_liters','Tankgröße in Litern',row.tank_size_liters), num('fuel_consumption_l_100km','Verbrauch l/100 km',row.fuel_consumption_l_100km), num('current_mileage','Aktueller Kilometerstand',row.current_mileage), num('maintenance_interval_km','Wartungsintervall km',row.maintenance_interval_km), num('last_maintenance_mileage','Letzte Wartung bei km',row.last_maintenance_mileage), calc('maintenance_preview','Nächste Wartung in Kilometern'), num('brake_status','Bremsenstatus %',row.brake_status), num('engine_status','Motorstatus %',row.engine_status), num('clutch_status','Kupplungsstatus %',row.clutch_status), num('tire_status','Reifenstatus %',row.tire_status), check('has_fax','Fax eingebaut',row.has_fax), check('has_tank_upgrade','Tankupgrade eingebaut',row.has_tank_upgrade), { type:'locationselect', name:'location_label', label:'Fahrzeugstandort', value: row.location_label || 'Hauptniederlassung Kassel', required: true, w: 6 } ]; }
 function personnelFields(row) { return [text('personnel_number','Personalnummer',row.personnel_number,true), text('name','Name',row.name,true), date('hire_date','Einstellungsdatum',row.hire_date,true), money('salary','Gehalt',row.salary_cents), select('position','Position',['Lkw-Fahrer','Sekretärin','Buchhalter','Disponent','Kfz-Mechaniker','Lagerist','Personalsachbearbeiter','Reinigungskraft','Wachmann','Telefonistin','Bilanzbuchhalter','Rechtsanwalt'],row.position,true), check('has_adr_training','ADR-Schulung vorhanden',row.has_adr_training)]; }
-function orderFields(row) { return [text('order_number','Auftragsnummer',row.order_number,true), select('order_type','Auftragsart',['Einzelvertrag','Teilabruf','Lagervertrag'],row.order_type,true), text('customer','Kunde',row.customer,true), text('start_location','Startort',row.start_location,true), text('delivery_location','Lieferort',row.delivery_location,true), check('return_to_kassel','Rückfahrt zur Hauptniederlassung Kassel',row.return_to_kassel), num('distance_km','Entfernung in km',row.distance_km), date('delivery_deadline','Lieferfrist',row.delivery_deadline), check('adr_required','ADR erforderlich',row.adr_required), date('delivery_date','Liefertermin',row.delivery_date), select('cargo_type','Frachttyp',['Pritsche','Tank','Vieh','Silo','Kühl','Tieflader','Universal'],row.cargo_type,true), num('cargo_amount_fe','Frachtmenge in FE',row.cargo_amount_fe), money('unit_price','Einzelpreis Euro/FE/km',row.unit_price_cents), calc('revenue_preview','Gesamtumsatz'), select('status','Auftragsstatus',['offen','in Arbeit','eingelagert','geliefert'],row.status || 'offen',true), { type:'multiselect', name:'vehicle_ids', label:'Fahrzeugauswahl' }]; }
+function orderFields(row) { return [text('order_number','Auftragsnummer',row.order_number,true), select('order_type','Auftragsart',['Einzelvertrag','Teilabruf','Lagervertrag'],row.order_type,true), { type:'contractselect', name:'framework_contract_id', label:'Rahmenvertrag (für Teilabruf)', value: row.framework_contract_id || '', w: 6 }, text('customer','Kunde',row.customer,true), text('start_location','Startort (Start zum Abholort)',row.start_location,true), text('delivery_location','Lieferort',row.delivery_location,true), check('return_to_start','Rückkehr zum Startort',row.return_to_start), select('final_stop_mode','Abstellort nach Auftrag',['startort','niederlassung','zielort'],row.final_stop_mode || (row.return_to_kassel ? 'niederlassung' : 'zielort'),true), num('distance_km','Entfernung in km',row.distance_km), date('delivery_deadline','Lieferfrist',row.delivery_deadline), check('adr_required','ADR erforderlich',row.adr_required), date('delivery_date','Liefertermin',row.delivery_date), select('cargo_type','Frachttyp',['Pritsche','Tank','Vieh','Silo','Kühl','Tieflader','Universal'],row.cargo_type,true), num('cargo_amount_fe','Frachtmenge in FE',row.cargo_amount_fe), money('unit_price','Einzelpreis Euro/FE/km',row.unit_price_cents), calc('revenue_preview','Gesamtumsatz'), select('status','Auftragsstatus',['offen','in Arbeit','eingelagert','geliefert'],row.status || 'offen',true), { type:'multiselect', name:'vehicle_ids', label:'Fahrzeugauswahl' }]; }
 function deliveryNoteFields(row) { return [{ type:'orderselect', name:'order_id', label:'Auftrag auswählen', value: row.order_id || '' }, text('order_number','Auftragsnummer',row.order_number,true), text('debtor','Debitor',row.debtor,true), text('goods','Ware',row.goods,true), num('cargo_amount_fe','Frachtmenge in FE',row.cargo_amount_fe), money('revenue','Umsatz',row.revenue_cents), select('status','Status',['Rechnung schreiben','warte auf Zahlungseingang','bezahlt','überfällig'],row.status,true)]; }
 function invoiceFields(row) { return [text('invoice_number','Rechnungsnummer',row.invoice_number,true), text('creditor','Kreditor',row.creditor,true), text('item','Posten',row.item,true), money('amount','Betrag',row.amount_cents), date('invoice_date','Datum',row.invoice_date,true), date('due_date','Fälligkeit',row.due_date,true), select('payment_status','Zahlungsstatus',['offen','bezahlt','überfällig'],row.payment_status || 'offen',true)]; }
 function investmentFields(row) { return [select('measure','Massnahme',['Flyer','Tageszeitung','Radiowerbung','Filmwerbung','Fernsehwerbung','große Werbekampagne'],row.measure,true), check('scope_regional','Regional',row.scope_regional), check('scope_national','National',row.scope_national), check('scope_international','International',row.scope_international), calc('investment_preview','Erfolgsquote und Kosten')]; }
 function locationFields(row) { return [text('name','Standortname',row.name,true,4), text('address','Adresse oder Suchbegriff',row.address,true,5), { type:'geocodebutton', w: 3 }, hidden('latitude', row.latitude), hidden('longitude', row.longitude), hidden('geocoding_status', row.geocoding_status || 'unbekannt'), { type:'calculated', name:'coordinate_preview', label:'Koordinaten', value: row.latitude == null || row.longitude == null ? 'Noch nicht geocodiert' : `${fmt.number(row.latitude, 5)}, ${fmt.number(row.longitude, 5)}`, w: 6 }]; }
+function frameworkContractFields(row) { return [text('contract_number','Rahmenvertragsnummer',row.contract_number,true), text('customer','Kunde',row.customer,true), text('start_location','Abholort',row.start_location,true), text('delivery_location','Lieferort',row.delivery_location,true), select('cargo_type','Frachttyp',['Pritsche','Tank','Vieh','Silo','Kühl','Tieflader','Universal'],row.cargo_type,true), money('unit_price','Einzelpreis Euro/FE/km',row.unit_price_cents,true), check('active','Aktiv',row.active ?? true), { type:'textarea', name:'notes', label:'Bemerkung', value: row.notes || '', w: 12 }]; }
 function text(name,label,value,required,w,readonly){ return { type:'text', name, label, value, required, w, readonly }; }
 function num(name,label,value,required,w){ return { type:'number', name, label, value: value ?? '', required, w, step: 'any' }; }
 function money(name,label,cents,required,w){ return { type:'text', name, label, value: fmt.inputMoney(cents), required, w }; }

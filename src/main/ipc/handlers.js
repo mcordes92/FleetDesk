@@ -29,6 +29,7 @@ function registerIpcHandlers(db) {
   ipcMain.handle('orders:vehicle-options', safe((order) => service.vehicleOptions(db, order)));
   ipcMain.handle('orders:suggest-vehicles', safe((order) => service.suggestions(db, order)));
   ipcMain.handle('orders:options', safe(() => service.orderOptions(db)));
+  ipcMain.handle('framework-contracts:options', safe(() => service.frameworkContractOptions(db)));
   ipcMain.handle('locations:options', safe(() => service.locationOptions(db)));
   ipcMain.handle('locations:geocode', safe(({ id }) => service.geocodeLocation(db, id)));
   ipcMain.handle('locations:geocode-address', safe(({ query }) => service.geocodeAddress(db, query)));

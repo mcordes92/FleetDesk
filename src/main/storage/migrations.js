@@ -159,6 +159,50 @@ const migrations = [
     sql: `
       ALTER TABLE invoices ADD COLUMN image_path TEXT;
     `
+  },
+  {
+    version: 4,
+    name: 'order_archiving_and_framework_contracts',
+    sql: `
+      ALTER TABLE orders ADD COLUMN return_to_start INTEGER NOT NULL DEFAULT 0 CHECK(return_to_start IN (0,1));
+      ALTER TABLE orders ADD COLUMN final_stop_mode TEXT NOT NULL DEFAULT 'zielort' CHECK(final_stop_mode IN ('startort', 'niederlassung', 'zielort'));
+      ALTER TABLE orders ADD COLUMN archived INTEGER NOT NULL DEFAULT 0 CHECK(archived IN (0,1));
+      ALTER TABLE orders ADD COLUMN archived_at TEXT;
+
+      CREATE TABLE framework_contracts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        contract_number TEXT NOT NULL UNIQUE,
+        customer TEXT NOT NULL,
+        start_location TEXT NOT NULL,
+        delivery_location TEXT NOT NULL,
+        cargo_type TEXT NOT NULL,
+        unit_price_cents INTEGER NOT NULL DEFAULT 0 CHECK(unit_price_cents >= 0),
+        active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)),
+        notes TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE INDEX framework_contracts_active_idx ON framework_contracts(active, updated_at DESC);
+      ALTER TABLE orders ADD COLUMN framework_contract_id INTEGER REFERENCES framework_contracts(id) ON DELETE SET NULL;
+      CREATE INDEX orders_archived_idx ON orders(archived, updated_at DESC);
+    `
+  },
+  {
+    version: 5,
+    name: 'paid_timestamps',
+    sql: `
+      ALTER TABLE delivery_notes ADD COLUMN paid_at TEXT;
+      ALTER TABLE invoices ADD COLUMN paid_at TEXT;
+
+      UPDATE delivery_notes
+      SET paid_at = COALESCE(paid_at, updated_at)
+      WHERE status = 'bezahlt';
+
+      UPDATE invoices
+      SET paid_at = COALESCE(paid_at, updated_at)
+      WHERE payment_status = 'bezahlt';
+    `
   }
 ];
 

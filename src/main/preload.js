@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld('fleetDesk', {
   openInvoiceImage: (id) => invoke('invoices:open-image', { id }),
   invoiceImage: (id) => invoke('invoices:image', { id }),
   orderOptions: () => invoke('orders:options'),
+  frameworkContractOptions: () => invoke('framework-contracts:options'),
   locationOptions: () => invoke('locations:options'),
   geocodeLocation: (id) => invoke('locations:geocode', { id }),
   geocodeAddress: (query) => invoke('locations:geocode-address', { query }),

@@ -52,7 +52,7 @@ test('deaktiviert bedingte Fahrzeugfelder serverseitig', () => {
   db.close();
 });
 
-test('gibt Fahrzeuge bei Status geliefert frei und aktualisiert Standort', () => {
+test('gibt Fahrzeuge bei Status geliefert frei und setzt standardmaessig Zielort', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fleetdesk-'));
   const db = initializeDatabase(dir);
   const vehicle = service.create(db, 'vehicles', { name: 'Lkw 1', license_plate: 'KS-FD 2', vehicle_type: 'Lkw', cargo_type: 'Pritsche', capacity_fe: 10, value: '1000', has_fax: true });
@@ -61,6 +61,17 @@ test('gibt Fahrzeuge bei Status geliefert frei und aktualisiert Standort', () =>
   service.update(db, 'orders', order.id, { ...order, unit_price: '1,00', status: 'geliefert', vehicle_ids: [vehicle.id] });
   const updated = service.get(db, 'vehicles', vehicle.id);
   assert.equal(updated.available, true);
+  assert.equal(updated.location_label, 'Hamburg');
+  db.close();
+});
+
+test('setzt Fahrzeuge nach Lieferung auf Startort bei Rueckkehr-Checkbox', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fleetdesk-'));
+  const db = initializeDatabase(dir);
+  const vehicle = service.create(db, 'vehicles', { name: 'Lkw 1B', license_plate: 'KS-FD 2B', vehicle_type: 'Lkw', cargo_type: 'Pritsche', capacity_fe: 10, value: '1000', has_fax: true });
+  const order = service.create(db, 'orders', { order_number: 'A-1B', order_type: 'Einzelvertrag', customer: 'Kunde', start_location: 'Berlin', delivery_location: 'Hamburg', return_to_start: true, final_stop_mode: 'zielort', distance_km: 100, cargo_type: 'Pritsche', cargo_amount_fe: 10, unit_price: '1,00', status: 'in Arbeit', vehicle_ids: [vehicle.id] });
+  service.update(db, 'orders', order.id, { ...order, unit_price: '1,00', status: 'geliefert', vehicle_ids: [vehicle.id] });
+  const updated = service.get(db, 'vehicles', vehicle.id);
   assert.equal(updated.location_label, 'Berlin');
   db.close();
 });
@@ -120,6 +131,30 @@ test('liefert Auftragsoptionen fuer Lieferschein-Uebernahme', () => {
   const options = service.orderOptions(db);
   assert.equal(options[0].order_number, 'A-3');
   assert.equal(options[0].revenue_cents, 10000);
+  db.close();
+});
+
+test('archiviert Auftrag bei Lieferschein-Uebernahme und blendet ihn in Optionen aus', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fleetdesk-'));
+  const db = initializeDatabase(dir);
+  const order = service.create(db, 'orders', { order_number: 'A-4', order_type: 'Einzelvertrag', customer: 'Debitor GmbH', start_location: 'Berlin', delivery_location: 'Hamburg', distance_km: 10, cargo_type: 'Tank', cargo_amount_fe: 4, unit_price: '2,50', status: 'offen', vehicle_ids: [] });
+  service.create(db, 'deliveryNotes', { order_id: order.id, order_number: order.order_number, debtor: 'Debitor GmbH', goods: 'Tank', cargo_amount_fe: 4, revenue: '100,00', status: 'bezahlt' });
+  const options = service.orderOptions(db);
+  assert.equal(options.some((item) => item.id === order.id), false);
+  assert.equal(service.get(db, 'orders', order.id).archived, true);
+  db.close();
+});
+
+test('uebernimmt Teilabruf-Stammdaten aus aktivem Rahmenvertrag', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fleetdesk-'));
+  const db = initializeDatabase(dir);
+  const contract = service.create(db, 'frameworkContracts', { contract_number: 'RV-100', customer: 'Kunde AG', start_location: 'Kassel', delivery_location: 'Leipzig', cargo_type: 'Silo', unit_price: '3,50', active: true });
+  const order = service.create(db, 'orders', { order_number: 'TA-1', order_type: 'Teilabruf', framework_contract_id: contract.id, customer: 'Ignored', start_location: 'Ignored', delivery_location: 'Ignored', final_stop_mode: 'zielort', distance_km: 50, cargo_type: 'Pritsche', cargo_amount_fe: 10, unit_price: '1,00', status: 'offen', vehicle_ids: [] });
+  assert.equal(order.customer, 'Kunde AG');
+  assert.equal(order.start_location, 'Kassel');
+  assert.equal(order.delivery_location, 'Leipzig');
+  assert.equal(order.cargo_type, 'Silo');
+  assert.equal(order.unit_price_cents, 350);
   db.close();
 });
 
