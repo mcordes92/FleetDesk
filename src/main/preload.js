@@ -4,6 +4,7 @@ const invoke = (channel, payload) => ipcRenderer.invoke(channel, payload);
 
 contextBridge.exposeInMainWorld('fleetDesk', {
   dashboard: () => invoke('dashboard:get'),
+  guvDetails: (monthKey) => invoke('guv:details', { monthKey }),
   getSettings: () => invoke('settings:get'),
   saveSettings: (settings) => invoke('settings:save', { settings }),
   list: (entity, options) => invoke('entity:list', { entity, options }),

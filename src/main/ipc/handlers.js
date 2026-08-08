@@ -13,6 +13,7 @@ function registerIpcHandlers(db) {
   };
 
   ipcMain.handle('dashboard:get', safe(() => service.dashboard(db)));
+  ipcMain.handle('guv:details', safe(({ monthKey }) => service.profitLossDetails(db, monthKey)));
   ipcMain.handle('settings:get', safe(() => service.getSettings(db)));
   ipcMain.handle('settings:save', safe(({ settings }) => service.saveSettings(db, settings)));
   ipcMain.handle('entity:list', safe(({ entity }) => service.list(db, entity)));

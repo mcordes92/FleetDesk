@@ -6,11 +6,13 @@ let dirty = false;
 let modal;
 let invoiceImportModal;
 let invoiceImageModal;
+let profitLossDetailsModal;
 let invoiceImportSourcePath = '';
 let vehicleChoices;
 let currentSort = { key: null, direction: 1 };
 let currentMap;
 let startupWarningSoundPlayed = false;
+let profitLossMonths = [];
 
 const vehicleTypes = ['Lkw','Lkw-Anhänger','Sattelzugmaschine','Auflieger','Kleintransporter','Gigaliner'];
 
@@ -33,6 +35,7 @@ document.addEventListener('DOMContentLoaded', () => {
   modal = new bootstrap.Modal(document.getElementById('recordModal'));
   invoiceImportModal = new bootstrap.Modal(document.getElementById('invoiceImportModal'));
   invoiceImageModal = new bootstrap.Modal(document.getElementById('invoiceImageModal'));
+  profitLossDetailsModal = new bootstrap.Modal(document.getElementById('profitLossDetailsModal'));
   document.getElementById('recordModal').addEventListener('hidden.bs.modal', destroyVehicleChoices);
   document.getElementById('invoiceImportForm').addEventListener('submit', saveInvoiceImport);
   renderNavigation();
@@ -114,7 +117,34 @@ function showAccounting() {
 async function showProfitLoss() {
   const dash = await call(api.dashboard());
   const current = dash.profitLoss.currentMonth;
-  document.getElementById('accountingView').innerHTML = `<div class="row g-3"><div class="col-md-4"><div class="card"><div class="card-body"><div class="text-secondary">Einnahmen aktueller Monat</div><div class="fs-3">${fmt.money(current.incomeCents)}</div></div></div></div><div class="col-md-4"><div class="card"><div class="card-body"><div class="text-secondary">Aufwendungen aktueller Monat</div><div class="fs-3">${fmt.money(current.expenseCents)}</div></div></div></div><div class="col-md-4"><div class="card"><div class="card-body"><div class="text-secondary">GuV aktueller Monat</div><div class="fs-3 ${current.resultCents < 0 ? 'text-danger' : 'text-success'}">${fmt.money(current.resultCents)}</div></div></div></div></div><div class="row g-3 mt-1"><div class="col-lg-7"><div class="card h-100"><div class="card-header">Monatsstatistik</div><div class="card-body p-0">${profitLossTable(dash.profitLoss.months, 'Monat')}</div></div></div><div class="col-lg-5"><div class="card h-100"><div class="card-header">Jahresstatistik</div><div class="card-body p-0">${profitLossTable(dash.profitLoss.years, 'Jahr')}</div></div></div></div>`;
+  profitLossMonths = dash.profitLoss.months;
+  document.getElementById('accountingView').innerHTML = `<div class="d-flex justify-content-end mb-3"><button class="btn btn-outline-info" id="plDetailsBtn"><i class="bi bi-list-columns-reverse"></i> GuV-Details je Monat</button></div><div class="row g-3"><div class="col-md-4"><div class="card"><div class="card-body"><div class="text-secondary">Einnahmen aktueller Monat</div><div class="fs-3">${fmt.money(current.incomeCents)}</div></div></div></div><div class="col-md-4"><div class="card"><div class="card-body"><div class="text-secondary">Aufwendungen aktueller Monat</div><div class="fs-3">${fmt.money(current.expenseCents)}</div></div></div></div><div class="col-md-4"><div class="card"><div class="card-body"><div class="text-secondary">GuV aktueller Monat</div><div class="fs-3 ${current.resultCents < 0 ? 'text-danger' : 'text-success'}">${fmt.money(current.resultCents)}</div></div></div></div></div><div class="row g-3 mt-1"><div class="col-lg-7"><div class="card h-100"><div class="card-header">Monatsstatistik</div><div class="card-body p-0">${profitLossTable(dash.profitLoss.months, 'Monat')}</div></div></div><div class="col-lg-5"><div class="card h-100"><div class="card-header">Jahresstatistik</div><div class="card-body p-0">${profitLossTable(dash.profitLoss.years, 'Jahr')}</div></div></div></div>`;
+  document.getElementById('plDetailsBtn').addEventListener('click', () => openProfitLossDetails(current.key));
+}
+
+async function openProfitLossDetails(defaultMonthKey) {
+  const select = document.getElementById('profitLossMonthSelect');
+  const options = profitLossMonths.length ? profitLossMonths : [{ key: defaultMonthKey, label: defaultMonthKey, incomeCents: 0, expenseCents: 0, resultCents: 0 }];
+  select.innerHTML = options.map((row) => `<option value="${escapeHtml(row.key)}" ${row.key === defaultMonthKey ? 'selected' : ''}>${escapeHtml(row.label)}</option>`).join('');
+  select.onchange = () => loadProfitLossDetails(select.value);
+  await loadProfitLossDetails(select.value || defaultMonthKey);
+  profitLossDetailsModal.show();
+}
+
+async function loadProfitLossDetails(monthKey) {
+  const details = await call(api.guvDetails(monthKey));
+  document.getElementById('profitLossDetailSummary').innerHTML = [
+    badge(`Monat: ${details.label}`, 'secondary'),
+    badge(`Einnahmen: ${fmt.money(details.incomeCents)}`, 'success'),
+    badge(`Aufwendungen: ${fmt.money(details.expenseCents)}`, 'warning'),
+    badge(`Ergebnis: ${fmt.money(details.resultCents)}`, details.resultCents < 0 ? 'danger' : 'info')
+  ].join(' ');
+  const host = document.getElementById('profitLossDetailHost');
+  if (!details.entries.length) {
+    host.innerHTML = '<div class="empty-state">Für diesen Monat wurden keine bezahlten Positionen gefunden.</div>';
+    return;
+  }
+  host.innerHTML = `<div class="table-responsive border-0"><table class="table table-hover align-middle mb-0"><thead><tr><th>Typ</th><th>Datum</th><th>Beleg</th><th>Partner</th><th>Position</th><th class="text-end">Betrag</th></tr></thead><tbody>${details.entries.map((entry) => `<tr><td>${escapeHtml(entry.type)}</td><td>${fmt.date(entry.date)}</td><td>${escapeHtml(entry.reference || '')}</td><td>${escapeHtml(entry.partner || '')}</td><td>${escapeHtml(entry.description || '')}</td><td class="text-end ${entry.direction === 'expense' ? 'text-warning' : 'text-success'}">${entry.direction === 'expense' ? '-' : '+'}${fmt.money(entry.amount_cents)}</td></tr>`).join('')}</tbody></table></div>`;
 }
 
 function profitLossTable(rows, label) {

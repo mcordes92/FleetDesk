@@ -474,6 +474,54 @@ function dashboard(db) {
   };
 }
 
+function profitLossDetails(db, monthKey) {
+  if (!/^\d{4}-\d{2}$/.test(String(monthKey || ''))) throw new Error('Monat muss im Format JJJJ-MM uebergeben werden.');
+  const incomes = db.prepare(`
+    SELECT order_number, debtor, goods, revenue_cents, COALESCE(paid_at, updated_at, created_at) posting_date
+    FROM delivery_notes
+    WHERE lower(status)='bezahlt'
+      AND substr(COALESCE(paid_at, updated_at, created_at), 1, 7)=?
+    ORDER BY posting_date DESC, id DESC
+  `).all(monthKey).map((row) => ({
+    type: 'Lieferschein',
+    date: String(row.posting_date || '').slice(0, 10),
+    reference: row.order_number,
+    partner: row.debtor,
+    description: row.goods,
+    amount_cents: Number(row.revenue_cents || 0),
+    direction: 'income'
+  }));
+
+  const expenses = db.prepare(`
+    SELECT invoice_number, creditor, item, amount_cents, COALESCE(paid_at, updated_at, invoice_date, created_at) posting_date
+    FROM invoices
+    WHERE lower(payment_status)='bezahlt'
+      AND substr(COALESCE(paid_at, updated_at, invoice_date, created_at), 1, 7)=?
+    ORDER BY posting_date DESC, id DESC
+  `).all(monthKey).map((row) => ({
+    type: 'Eingangsrechnung',
+    date: String(row.posting_date || '').slice(0, 10),
+    reference: row.invoice_number,
+    partner: row.creditor,
+    description: row.item,
+    amount_cents: Number(row.amount_cents || 0),
+    direction: 'expense'
+  }));
+
+  const incomeCents = incomes.reduce((sum, row) => sum + row.amount_cents, 0);
+  const expenseCents = expenses.reduce((sum, row) => sum + row.amount_cents, 0);
+  return {
+    monthKey,
+    label: formatPeriodLabel(monthKey, true),
+    incomeCents,
+    expenseCents,
+    resultCents: incomeCents - expenseCents,
+    entries: [...incomes, ...expenses].sort((a, b) => String(b.date).localeCompare(String(a.date)) || String(a.reference || '').localeCompare(String(b.reference || ''))),
+    incomeEntries: incomes,
+    expenseEntries: expenses
+  };
+}
+
 function getSettings(db) {
   const row = db.prepare('SELECT value FROM app_settings WHERE key=?').get('settings');
   if (!row) return defaultSettings();
@@ -665,4 +713,4 @@ function nullableNumber(value) { return value === '' || value === undefined || v
 function clampPercent(value) { const number = nullableNumber(value); return number == null || Number.isNaN(number) ? 0 : Math.min(100, Math.max(0, number)); }
 function ensureEntity(entity) { if (!TABLES[entity]) throw new Error('Unbekannter Verwaltungsbereich.'); }
 
-module.exports = { list, get, create, update, remove, dashboard, getSettings, saveSettings, vehicleOptions, suggestions, orderOptions, frameworkContractOptions, locationOptions, geocodeLocation, geocodeAddress, mapData, exportDatabase, importDatabase, backupDatabase, validateImportDatabase, relaunchApp, analyzeInvoiceImage, selectInvoiceImage, analyzeSelectedInvoiceImage, createInvoiceFromImageImport, openInvoiceImage, invoiceImage };
+module.exports = { list, get, create, update, remove, dashboard, profitLossDetails, getSettings, saveSettings, vehicleOptions, suggestions, orderOptions, frameworkContractOptions, locationOptions, geocodeLocation, geocodeAddress, mapData, exportDatabase, importDatabase, backupDatabase, validateImportDatabase, relaunchApp, analyzeInvoiceImage, selectInvoiceImage, analyzeSelectedInvoiceImage, createInvoiceFromImageImport, openInvoiceImage, invoiceImage };

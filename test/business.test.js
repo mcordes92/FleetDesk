@@ -163,3 +163,18 @@ test('validiert Importdatenbank auf benoetigte Tabellen', () => {
   const db = new Database(file); db.exec('CREATE TABLE test (id INTEGER)'); db.close();
   assert.throws(() => service.validateImportDatabase(file), /vehicles/);
 });
+
+test('liefert GuV-Detailpositionen je Monat', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fleetdesk-'));
+  const db = initializeDatabase(dir);
+  db.prepare("INSERT INTO delivery_notes (order_number, debtor, goods, cargo_amount_fe, revenue_cents, status, paid_at) VALUES ('A-10', 'Debitor X', 'Tank', 5, 120000, 'bezahlt', '2026-08-03T10:00:00.000Z')").run();
+  db.prepare("INSERT INTO invoices (invoice_number, creditor, item, amount_cents, invoice_date, due_date, payment_status, paid_at) VALUES ('RE-10', 'Kreditor Y', 'Diesel', 50000, '2026-08-01', '2026-08-15', 'bezahlt', '2026-08-05T09:00:00.000Z')").run();
+  const details = service.profitLossDetails(db, '2026-08');
+  assert.equal(details.incomeCents, 120000);
+  assert.equal(details.expenseCents, 50000);
+  assert.equal(details.resultCents, 70000);
+  assert.equal(details.entries.length, 2);
+  assert.equal(details.entries.some((row) => row.type === 'Lieferschein'), true);
+  assert.equal(details.entries.some((row) => row.type === 'Eingangsrechnung'), true);
+  db.close();
+});
